@@ -1,0 +1,35 @@
+{
+  "name": "pi-vision-bridge",
+  "version": "0.1.0",
+  "description": "Give text-only Pi models task-aware image understanding through a configurable vision sidecar.",
+  "type": "module",
+  "keywords": ["pi-package", "pi", "vision", "multimodal", "qwen"],
+  "license": "MIT",
+  "files": ["extensions", "src", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@earendil-works/pi-tui": "0.83.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typebox": "^1.3.7",
+    "typescript": "^5.7.2"
+  },
+  "pi": {
+    "extensions": ["./extensions/vision-bridge.ts"]
+  }
+}
