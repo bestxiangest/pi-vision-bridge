@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 
 import { StringEnum, Type, type Usage } from "@earendil-works/pi-ai";
-import { CONFIG_DIR_NAME, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, isToolCallEventType, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Image, Text } from "@earendil-works/pi-tui";
 
 import { ArtifactStore, readArtifactData, type Artifact, type ArtifactReference } from "../src/artifacts.js";
@@ -157,6 +157,33 @@ function renderResult(result: { details?: unknown }, expanded: boolean, theme: {
 	return new Text(lines.join("\n"));
 }
 
+function attachmentManifest(references: ArtifactReference[]): string {
+	return JSON.stringify(
+		{
+			attachments: references.map(({ artifact, label }, index) => ({
+				image_index: index + 1,
+				...(label ? { filename: label } : {}),
+				artifact_id: artifact.id,
+				width: artifact.width,
+				height: artifact.height,
+				mime_type: artifact.mimeType,
+			})),
+		},
+		null,
+		2,
+	);
+}
+
+function imageReadBlockReason(path: string, references: ArtifactReference[]): string {
+	return [
+		`Pi Vision Bridge intercepted read for a local image path: ${path}`,
+		"Do not retry the built-in read tool for this image. A text-only model cannot inspect image pixels through read.",
+		"Use vision_inspect now. Copy the complete artifact_id from this manifest, including sha256: and all 64 hexadecimal characters, and write a task-specific objective.",
+		"[Pi Vision Bridge attachment manifest]",
+		attachmentManifest(references),
+	].join("\n");
+}
+
 export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 	const initialLoaded = await loadConfig(process.cwd(), CONFIG_DIR_NAME, false);
 	const initialCredentials = await loadCredentials(initialLoaded.paths);
@@ -178,6 +205,15 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 	});
 	pi.on("model_select", (_event, ctx) => {
 		updateStatus(state, ctx);
+	});
+	pi.on("before_agent_start", async (event, ctx) => {
+		if (state.config.routing === "off" || !shouldUseVisionBridge(state.config, ctx.model)) return;
+		return {
+			systemPrompt: [
+				event.systemPrompt,
+				"Pi Vision Bridge image routing: this main model is text-only. If a local path ends in an image extension, do not call the built-in read tool to inspect it. The bridge intercepts image reads and provides an artifact manifest; call vision_inspect with a task-specific objective. Do not claim to see image pixels until the vision tool returns evidence.",
+			].join("\n\n"),
+		};
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setStatus("vision-bridge", undefined);
@@ -270,7 +306,29 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 				text: `${event.text}\n\n[Pi Vision Bridge could not ingest the attached image: ${(error as Error).message}]`,
 				images: [],
 			};
+			}
+		});
+
+	pi.on("tool_call", async (event, ctx) => {
+		if (!isToolCallEventType("read", event) || state.config.routing === "off" || !shouldUseVisionBridge(state.config, ctx.model)) return;
+		const scan = await scanLocalImageAttachments(event.input.path, ctx.cwd, {
+			maxImages: state.config.maxImages,
+			maxImageBytes: state.config.maxImageBytes,
+			maxPixels: state.config.maxPixels,
+		});
+		if (!scan.attachments.length && !scan.unresolved.length) return;
+		if (!scan.attachments.length) {
+			return {
+				block: true,
+				reason: `Pi Vision Bridge could not ingest this image path: ${event.input.path}. Do not retry read; confirm that the file exists, is readable, and is a supported image type.`,
+			};
 		}
+		if (scan.attachments.length > state.config.maxImages) {
+			return { block: true, reason: `Pi Vision Bridge rejected this read because it resolved to more than ${state.config.maxImages} images.` };
+		}
+		const artifacts = await Promise.all(scan.attachments.map(({ image }) => state.artifacts.ingestImage(image)));
+		state.currentArtifacts = artifacts.map((artifact, index) => ({ artifact, label: scan.attachments[index]?.displayName }));
+		return { block: true, reason: imageReadBlockReason(event.input.path, state.currentArtifacts) };
 	});
 
 	pi.registerTool({
