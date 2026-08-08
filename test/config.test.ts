@@ -69,4 +69,34 @@ describe("configuration", () => {
 		);
 		assert.equal(shouldUseVisionBridge({ ...config, enabledMainModels: [] }, undefined), true);
 	});
+
+	it("parses retry, fallback, audit, and local-only settings", () => {
+		const config = normalizeConfig({
+			maxRetries: 99,
+			fallbackModel: "  fallback-model  ",
+			fallbackBaseUrl: "https://fallback.example/v1",
+			auditEnabled: false,
+			localOnly: true,
+		});
+		assert.equal(config.maxRetries, 6); // clamped
+		assert.equal(config.fallbackModel, "fallback-model"); // trimmed
+		assert.equal(config.fallbackBaseUrl, "https://fallback.example/v1");
+		assert.equal(config.auditEnabled, false);
+		assert.equal(config.localOnly, true);
+		assert.equal(normalizeConfig({ maxRetries: -3 }).maxRetries, 0);
+		assert.equal(normalizeConfig({}).maxRetries, DEFAULT_CONFIG.maxRetries);
+		assert.equal(normalizeConfig({}).localOnly, false);
+	});
+
+	it("stores a separate fallback API key in credentials", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-vision-creds-"));
+		const paths = getConfigPaths(root, ".pi", { PI_CODING_AGENT_DIR: join(root, "global") });
+		await saveCredentials(paths, "primary-secret", "fallback-secret");
+		const loaded = await loadCredentials(paths);
+		assert.equal(loaded?.apiKey, "primary-secret");
+		assert.equal(loaded?.fallbackApiKey, "fallback-secret");
+		await saveCredentials(paths, "primary-secret");
+		const withoutFallback = await loadCredentials(paths);
+		assert.equal(withoutFallback?.fallbackApiKey, undefined);
+	});
 });

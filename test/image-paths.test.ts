@@ -43,4 +43,44 @@ describe("local image path recovery", () => {
 		assert.deepEqual(scan.attachments, []);
 		assert.deepEqual(scan.unresolved, ["missing.png"]);
 	});
+
+	it("recovers paths embedded in prose with CJK or ASCII punctuation", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-vision-punct-"));
+		const shot = join(root, "shot.png");
+		await writeFile(shot, PNG_1X1);
+		const cases = [
+			`看图：${shot}，请分析`, // CJK comma, no space
+			`请分析 ${shot}。`, // CJK period
+			`请分析 ${shot}, thanks`, // ASCII comma
+			`截图 ${shot}；检查`, // CJK semicolon
+			`截图 ${shot}）`, // full-width paren
+		];
+		for (const text of cases) {
+			const scan = await scanLocalImageAttachments(text, root, LIMITS);
+			assert.equal(scan.attachments.length, 1, `expected one attachment for: ${text}`);
+			assert.deepEqual(scan.unresolved, [], `expected no unresolved for: ${text}`);
+		}
+	});
+
+	it("recovers Windows drive-letter paths (forward and back slashes)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-vision-win-"));
+		const shot = join(root, "shot.png");
+		await writeFile(shot, PNG_1X1);
+		// Simulate a Windows drive-letter path; the file still exists via its
+		// real location after path resolution on the current platform.
+		const winStyle = shot.replace(/^[A-Za-z]:/, "C:");
+		const winBackslash = winStyle.replace(/\//g, "\\");
+		const scan = await scanLocalImageAttachments(`看图：${winBackslash}，请分析`, root, LIMITS);
+		assert.equal(scan.attachments.length, 1);
+		assert.equal(scan.attachments[0]?.displayName, "shot.png");
+		const posixDrive = await scanLocalImageAttachments(`看图 ${winStyle}`, root, LIMITS);
+		assert.equal(posixDrive.attachments.length, 1);
+	});
+
+	it("still rejects tokens that are only path-like prefixes", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-vision-reject-"));
+		const scan = await scanLocalImageAttachments("C:\\Users\\fake\\shot.pngbackup", root, LIMITS);
+		assert.deepEqual(scan.attachments, []);
+		assert.deepEqual(scan.unresolved, []);
+	});
 });

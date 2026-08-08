@@ -26,6 +26,8 @@ Pi Vision Bridge 是一个面向 [Pi Agent](https://github.com/earendil-works/pi
 - **可精确限定生效模型**：支持完整 `provider/model`、模型 ID 和通配符，只为指定的纯文本模型启用视觉桥接。
 - **兼容 OpenAI Chat Completions 接口**：视觉模型的 Base URL、API Key 和模型 ID 均可配置，已验证 StepFun，也内置 DashScope 端点预设。
 - **隐私控制清晰**：图片上传默认需要确认；密钥与项目配置分离；视觉结果缓存可设置有效期与容量上限，最近分析可预览，全部缓存可一键清理。
+- **弹性重试与 Fallback 模型**：可重试错误（`5xx`/`429`/网络）自动按指数退避重试，且可配置备用视觉模型或独立备用端点，主模型失败时自动切换，单次失败不再中断整个分析。
+- **可审计、可本地化**：每次视觉委托写入 append-only JSONL 审计日志（图片去了哪里、用了哪个模型、耗时与成败一目了然）；`local-only` 模式可保证图片字节绝不出机器。
 - **图像内容不具备指令权**：截图中的文字、二维码和提示词只作为待分析数据，不会被视觉 Harness 当成系统指令执行。
 
 ## 适用场景
@@ -223,6 +225,10 @@ Pi 在 macOS 中粘贴图片使用 `Ctrl+V`，不是 `Cmd+V`：
 | `Response detail` | `concise`、`balanced` 或 `detailed` |
 | `Thinking` | 是否向支持该参数的视觉端点请求思考模式 |
 | `Timeout` | 单次视觉请求超时时间 |
+| `Retries` | 可重试失败（`5xx`/`429`/网络）的额外重试次数（0–6，默认 2） |
+| `Fallback model` | 备用视觉模型 ID；留空表示不启用 Fallback |
+| `Fallback API Key` | 独立备用端点的密钥，只保存在全局私密凭据文件中 |
+| `Fallback base URL` | 独立的 OpenAI 兼容备用端点；留空则 Fallback 复用主端点 |
 | `Max image size` | 单张图片允许的最大字节数 |
 | `Max pixels` | 单张图片允许的最大像素数 |
 | `Max images` | 单次输入允许的最大图片数量 |
@@ -230,6 +236,8 @@ Pi 在 macOS 中粘贴图片使用 `Ctrl+V`，不是 `Cmd+V`：
 | `Cache` | 是否复用已缓存的视觉结果 |
 | `Cache TTL` | 视觉结果可被复用的有效时间 |
 | `Cache limit` | 视觉结果缓存的容量上限 |
+| `Audit log` | 是否将每次视觉委托写入 append-only JSONL 审计日志 |
+| `Local-only` | 开启后图片字节绝不发往远程视觉端点，仅允许命中本地缓存 |
 
 ### 主模型匹配规则
 
@@ -252,6 +260,29 @@ provider/*
 | `fallback-auto` | 图片输入后立即调用视觉模型，并把结果作为上下文交给主模型 |
 | `off` | 关闭视觉桥接 |
 
+### 弹性重试与 Fallback 模型
+
+视觉请求默认先尝试主模型，遇到可重试失败（HTTP `408`/`425`/`429`/`5xx`、网络错误、超时）时按指数退避自动重试，默认额外重试 2 次（可通过 `Retries` 调整到 0–6）。退避延迟随重试次数递增并加入抖动，避免对服务商造成二次冲击；用户取消（Abort）会立即停止重试。
+
+主模型重试耗尽或遇到不可重试错误（如 `4xx`、模型不存在）后，会尝试一次备用视觉模型：
+
+- **同端点 Fallback**：只配置 `Fallback model` 时，使用同一端点和主密钥切换备用模型 ID。
+- **独立端点 Fallback**：同时配置 `Fallback base URL`、`Fallback model` 与 `Fallback API Key` 时，插件会注册第二个视觉 Provider，把请求切换到完全独立的服务商，适合主服务整体故障的场景。
+
+Fallback 成功的结果不会写入主模型缓存键，避免主模型缓存与备用模型结果混淆；`vision_inspect` 的工具结果与审计日志会标明本次是否使用了 Fallback。
+
+### 审计日志
+
+每次视觉委托（成功、缓存命中、Fallback、失败）都会以 JSONL 追加写入 `~/.pi/agent/vision-bridge/audit.log`，每条记录包含时间戳、结果类型、实际使用的模型、分析模式、图片数量、Artifact ID、耗时，以及失败时的截断错误信息。日志不包含图片字节、完整提示词或任何密钥，可用于回答“图片去了哪里、调用是否成功”。
+
+```json
+{"ts":"2026-08-08T01:23:45.678Z","outcome":"success","model":"qwen3.7-flash","mode":"ui_geometry","imageCount":1,"artifactIds":["sha256:..."],"elapsedMs":1234}
+```
+
+### 本地模式（local-only）
+
+开启 `Local-only` 后，插件只允许命中本地视觉结果缓存；缓存未命中时会直接拒绝并报错，图片字节不会发往任何远程端点。适合处理敏感截图。注意：开启后新图片将无法完成首次分析，直到缓存中存在匹配结果或关闭该选项。
+
 ## 命令
 
 | 命令 | 说明 |
@@ -259,9 +290,10 @@ provider/*
 | `/vision-settings` | 打开全局设置界面 |
 | `/vision-settings project` | 为受信任项目保存非敏感覆盖设置 |
 | `/vision-test` | 测试视觉模型端点和图片输入能力 |
-| `/vision-status` | 显示当前视觉模型、端点、主模型范围、路由和缓存状态 |
+| `/vision-status` | 显示当前视觉模型、端点、主模型范围、路由、重试、Fallback、审计和缓存状态 |
 | `/vision-last` | 在 Pi TUI 中预览本会话最近一次分析的图片和证据 |
 | `/vision-cache-clear` | 确认后清理本地图像 Artifact 和视觉结果缓存 |
+| `/vision-audit` | 显示最近 8 条审计记录；支持 `on` / `off` / `clear` / `count` 子命令 |
 
 ## Artifact 与调用可靠性
 
@@ -290,6 +322,8 @@ provider/*
 
 - 图片在调用视觉模型前保存在 Pi 配置目录下的私有缓存中。
 - 远程上传默认采用 `always` 确认策略。
+- `Local-only` 开启时，图片字节不会发往任何远程端点；缓存命中仍可正常返回。
+- 每次视觉委托写入 `~/.pi/agent/vision-bridge/audit.log`（append-only JSONL，不含图片字节、提示词与密钥），可用 `/vision-audit` 查看或清理。
 - API Key 不会写入项目配置、会话记录或工具参数。
 - 全局配置和凭据文件以仅当前用户可读写的权限保存。
 - 项目级设置只能覆盖非敏感配置，且要求项目已被信任。
@@ -302,6 +336,7 @@ provider/*
 ```text
 ~/.pi/agent/vision-bridge/config.json
 ~/.pi/agent/vision-bridge/credentials.json
+~/.pi/agent/vision-bridge/audit.log
 ~/.pi/agent/vision-bridge/cache/
 <project>/.pi/vision-bridge/project.json
 ```
