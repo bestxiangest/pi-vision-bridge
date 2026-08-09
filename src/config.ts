@@ -19,6 +19,16 @@ export interface VisionConfig {
 	responseDetail: ResponseDetail;
 	enableThinking: boolean;
 	timeoutMs: number;
+	/** Extra attempts after the first try for retryable vision failures (5xx/429/network). */
+	maxRetries: number;
+	/** Fallback vision model id on the same endpoint. Empty means no same-endpoint fallback. */
+	fallbackModel: string;
+	/** Optional separate OpenAI-compatible endpoint for the fallback vision model. */
+	fallbackBaseUrl: string;
+	/** Append-only JSONL audit log of every vision delegation. */
+	auditEnabled: boolean;
+	/** Never send image bytes to a remote vision endpoint; cache hits only. */
+	localOnly: boolean;
 	maxImageBytes: number;
 	maxPixels: number;
 	maxImages: number;
@@ -32,6 +42,8 @@ export interface VisionConfig {
 export interface VisionCredentials {
 	version: 1;
 	apiKey: string;
+	/** API key for a separate fallback endpoint (optional). */
+	fallbackApiKey?: string;
 }
 
 export interface ConfigPaths {
@@ -59,6 +71,11 @@ export const DEFAULT_CONFIG: VisionConfig = {
 	responseDetail: "balanced",
 	enableThinking: false,
 	timeoutMs: 60_000,
+	maxRetries: 2,
+	fallbackModel: "",
+	fallbackBaseUrl: "",
+	auditEnabled: true,
+	localOnly: false,
 	maxImageBytes: 20 * 1024 * 1024,
 	maxPixels: 20_000_000,
 	maxImages: 8,
@@ -117,6 +134,11 @@ export function normalizeConfig(raw: unknown, base: VisionConfig = DEFAULT_CONFI
 		responseDetail: stringEnum(input.responseDetail, ["concise", "balanced", "detailed"], base.responseDetail),
 		enableThinking: typeof input.enableThinking === "boolean" ? input.enableThinking : base.enableThinking,
 		timeoutMs: numberInRange(input.timeoutMs, base.timeoutMs, 5_000, 10 * 60_000),
+		maxRetries: numberInRange(input.maxRetries, base.maxRetries, 0, 6),
+		fallbackModel: typeof input.fallbackModel === "string" ? input.fallbackModel.trim() : base.fallbackModel,
+		fallbackBaseUrl: normalizeBaseUrl(input.fallbackBaseUrl, base.fallbackBaseUrl),
+		auditEnabled: typeof input.auditEnabled === "boolean" ? input.auditEnabled : base.auditEnabled,
+		localOnly: typeof input.localOnly === "boolean" ? input.localOnly : base.localOnly,
 		maxImageBytes: numberInRange(input.maxImageBytes, base.maxImageBytes, 64 * 1024, 20 * 1024 * 1024),
 		maxPixels: numberInRange(input.maxPixels, base.maxPixels, 1024, 50_000_000),
 		maxImages: numberInRange(input.maxImages, base.maxImages, 1, 32),
@@ -188,18 +210,31 @@ export async function saveGlobalConfig(paths: ConfigPaths, config: VisionConfig)
 export async function saveProjectConfig(paths: ConfigPaths, config: Partial<VisionConfig>): Promise<void> {
 	const allowed: Partial<VisionConfig> = { ...config };
 	delete (allowed as Partial<VisionConfig> & { apiKey?: string }).apiKey;
+	delete (allowed as Partial<VisionConfig> & { fallbackApiKey?: string }).fallbackApiKey;
 	await writeJsonAtomic(paths.projectConfigPath, allowed, 0o600);
 }
 
 export async function loadCredentials(paths: ConfigPaths): Promise<VisionCredentials | undefined> {
 	const value = await readJsonFile(paths.credentialsPath);
 	if (!value || typeof value.apiKey !== "string" || value.apiKey.length === 0) return undefined;
-	return { version: 1, apiKey: value.apiKey };
+	return {
+		version: 1,
+		apiKey: value.apiKey,
+		...(typeof value.fallbackApiKey === "string" && value.fallbackApiKey.length > 0 ? { fallbackApiKey: value.fallbackApiKey } : {}),
+	};
 }
 
-export async function saveCredentials(paths: ConfigPaths, apiKey: string): Promise<void> {
+export async function saveCredentials(paths: ConfigPaths, apiKey: string, fallbackApiKey?: string): Promise<void> {
 	if (!apiKey.trim()) throw new Error("API key cannot be empty");
-	await writeJsonAtomic(paths.credentialsPath, { version: 1, apiKey: apiKey.trim() }, 0o600);
+	await writeJsonAtomic(
+		paths.credentialsPath,
+		{
+			version: 1,
+			apiKey: apiKey.trim(),
+			...(fallbackApiKey?.trim() ? { fallbackApiKey: fallbackApiKey.trim() } : {}),
+		},
+		0o600,
+	);
 }
 
 export async function clearCredentials(paths: ConfigPaths): Promise<void> {

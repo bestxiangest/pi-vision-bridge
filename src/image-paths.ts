@@ -45,7 +45,9 @@ function unquote(value: string): string {
 }
 
 function cleanCandidate(value: string): string {
-	return unquote(value).replace(/^@(?=~?\/|\.?\/|[A-Za-z0-9_\-])/u, "").replace(/[),.;:!?]+$/u, "");
+	return unquote(value)
+		.replace(/^@(?=~?\/|\.?\/|[A-Za-z0-9_\-])/u, "")
+		.replace(/[),.;:!?，。；：、》」』】]+$/u, "");
 }
 
 function candidateTokens(text: string): string[] {
@@ -59,7 +61,10 @@ function candidateTokens(text: string): string[] {
 		const value = cleanCandidate(match[1] ?? "");
 		addCandidate(value);
 	}
-	const unquoted = /(?:^|[\s(：:])(@?(?:(?:~\/|\/|\.{1,2}\/)[^\s"'<>]+|[A-Za-z0-9_.-][^\s"'<>]*)\.(?:png|jpe?g|webp|gif|bmp|tiff?))(?!\S)/giu;
+	// A path may be followed by a punctuation mark (English or CJK), whitespace, or the
+	// end of the input. The old (?!\S) lookahead rejected any non-whitespace suffix, which
+	// silently dropped paths embedded in prose such as "看图：C:\\x\\shot.png，请分析".
+	const unquoted = /(?:^|[\s(：:])(@?(?:(?:~\/|\/|\.{1,2}\/)[^\s"'<>]+|[A-Za-z0-9_.-][^\s"'<>]*)\.(?:png|jpe?g|webp|gif|bmp|tiff?))(?=[\s,.;:!?，。；：、)）\]】"'<>]|$)/giu;
 	for (const match of text.matchAll(unquoted)) {
 		const value = cleanCandidate(match[1] ?? "");
 		addCandidate(value);

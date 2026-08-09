@@ -16,6 +16,7 @@ import {
 export interface SettingsState {
 	config: VisionConfig;
 	apiKey?: string;
+	fallbackApiKey?: string;
 	paths: ConfigPaths;
 }
 
@@ -102,6 +103,7 @@ export async function runSettings(
 	}
 	let config = { ...state.config };
 	let apiKey = state.apiKey;
+	let fallbackApiKey = state.fallbackApiKey;
 	let credentialsChanged = false;
 
 	while (true) {
@@ -111,11 +113,15 @@ export async function runSettings(
 			`Model: ${config.model}`,
 			`Enabled main models: ${formatEnabledMainModels(config.enabledMainModels)}`,
 			`API Key: ${maskSecret(apiKey)}`,
+			`Fallback API Key: ${maskSecret(fallbackApiKey)}`,
+			`Fallback model: ${config.fallbackModel || "none"}`,
+			`Fallback base URL: ${compactUrl(config.fallbackBaseUrl)}`,
 			`Routing: ${config.routing}`,
 			`Upload confirmation: ${config.uploadConfirmation}`,
 			`Response detail: ${config.responseDetail}`,
 			`Thinking: ${config.enableThinking ? "on" : "off"}`,
 			`Timeout: ${Math.round(config.timeoutMs / 1000)} s`,
+			`Retries: ${config.maxRetries}`,
 			`Max image size: ${mib(config.maxImageBytes)}`,
 			`Max pixels: ${config.maxPixels}`,
 			`Max images: ${config.maxImages}`,
@@ -124,6 +130,8 @@ export async function runSettings(
 			`Cache: ${config.cacheEnabled ? "on" : "off"}`,
 			`Cache TTL: ${config.cacheTtlHours} h`,
 			`Cache limit: ${mib(config.cacheMaxBytes)}`,
+			`Audit log: ${config.auditEnabled ? "on" : "off"}`,
+			`Local-only: ${config.localOnly ? "on" : "off"}`,
 			"Save and close",
 			"Discard changes",
 		];
@@ -134,10 +142,10 @@ export async function runSettings(
 			if (scope === "global") await saveGlobalConfig(state.paths, config);
 			else await saveProjectConfig(state.paths, config);
 			if (credentialsChanged) {
-				if (apiKey) await saveCredentials(state.paths, apiKey);
+				if (apiKey) await saveCredentials(state.paths, apiKey, fallbackApiKey);
 				else await clearCredentials(state.paths);
 			}
-			await onSave({ config, apiKey, paths: state.paths });
+			await onSave({ config, apiKey, fallbackApiKey, paths: state.paths });
 			ctx.ui.notify("Pi Vision Bridge settings saved", "info");
 			return;
 		}
@@ -177,16 +185,35 @@ export async function runSettings(
 			if (value !== undefined) config.enabledMainModels = value.split(",").map((entry) => entry.trim()).filter(Boolean);
 			continue;
 		}
-		if (choice.startsWith("API Key:")) {
-			const action = await ctx.ui.select("API key", ["Set API key", "Clear API key", "Cancel"]);
+		if (choice.startsWith("Fallback model:")) {
+			const value = await ctx.ui.input("Fallback vision model ID (empty to disable)", config.fallbackModel);
+			if (value !== undefined) config.fallbackModel = value.trim();
+			continue;
+		}
+		if (choice.startsWith("Fallback base URL:")) {
+			const value = await ctx.ui.input("Separate OpenAI-compatible fallback endpoint (empty = same endpoint)", config.fallbackBaseUrl || "https://host.example/v1");
+			if (value !== undefined) config.fallbackBaseUrl = value.trim();
+			continue;
+		}
+		if (choice.startsWith("API Key:") || choice.startsWith("Fallback API Key:")) {
+			const action = await ctx.ui.select("API key", ["Set API key", "Set fallback API key", "Clear API key", "Clear fallback API key", "Cancel"]);
 			if (action === "Set API key") {
 				const value = await promptSecret(ctx, "Enter API key (masked)");
 				if (value?.trim()) {
 					apiKey = value.trim();
 					credentialsChanged = true;
 				}
+			} else if (action === "Set fallback API key") {
+				const value = await promptSecret(ctx, "Enter fallback API key (masked)");
+				if (value?.trim()) {
+					fallbackApiKey = value.trim();
+					credentialsChanged = true;
+				}
 			} else if (action === "Clear API key") {
 				apiKey = undefined;
+				credentialsChanged = true;
+			} else if (action === "Clear fallback API key") {
+				fallbackApiKey = undefined;
 				credentialsChanged = true;
 			}
 			continue;
@@ -214,9 +241,18 @@ export async function runSettings(
 			config.cacheEnabled = !config.cacheEnabled;
 			continue;
 		}
+		if (choice.startsWith("Audit log:")) {
+			config.auditEnabled = !config.auditEnabled;
+			continue;
+		}
+		if (choice.startsWith("Local-only:")) {
+			config.localOnly = !config.localOnly;
+			continue;
+		}
 
 		const numeric: Array<[string, keyof VisionConfig, number]> = [
 			["Timeout:", "timeoutMs", 1000],
+			["Retries:", "maxRetries", 1],
 			["Max image size:", "maxImageBytes", 1024 * 1024],
 			["Max pixels:", "maxPixels", 1],
 			["Max images:", "maxImages", 1],

@@ -5,8 +5,9 @@ import { CONFIG_DIR_NAME, isToolCallEventType, type ExtensionAPI, type Extension
 import { Box, Image, Text } from "@earendil-works/pi-tui";
 
 import { ArtifactStore, readArtifactData, type Artifact, type ArtifactReference } from "../src/artifacts.js";
+import { appendAuditEntry, auditLogSize, clearAuditEntries, countAuditEntries, tailAuditEntries, truncateError, type AuditEntry } from "../src/audit.js";
 import { makeVisionCacheKey, VisionCache } from "../src/cache.js";
-import { formatEnabledMainModels, loadConfig, loadCredentials, shouldUseVisionBridge, type ConfigPaths, type VisionConfig } from "../src/config.js";
+import { formatEnabledMainModels, loadConfig, loadCredentials, saveGlobalConfig, shouldUseVisionBridge, type ConfigPaths, type VisionConfig } from "../src/config.js";
 import { removeImagePathMarkers, scanLocalImageAttachments } from "../src/image-paths.js";
 import { registerVisionProvider, VisionClient } from "../src/provider.js";
 import { runSettings } from "../src/tui.js";
@@ -16,6 +17,7 @@ interface RuntimeState {
 	config: VisionConfig;
 	paths: ConfigPaths;
 	apiKey?: string;
+	fallbackApiKey?: string;
 	artifacts: ArtifactStore;
 	cache: VisionCache;
 	client: VisionClient;
@@ -28,6 +30,7 @@ interface RuntimeState {
 interface VisionToolDetails {
 	observation: VisionObservation;
 	cacheHit: boolean;
+	usedFallback: boolean;
 	elapsedMs: number;
 	artifactIds: string[];
 }
@@ -50,14 +53,15 @@ function updateStatus(state: RuntimeState, ctx: ExtensionContext): void {
 	ctx.ui.setStatus("vision-bridge", status);
 }
 
-function buildRuntime(config: VisionConfig, paths: ConfigPaths, apiKey?: string): RuntimeState {
+function buildRuntime(config: VisionConfig, paths: ConfigPaths, apiKey?: string, fallbackApiKey?: string): RuntimeState {
 	return {
 		config,
 		paths,
 		apiKey,
+		fallbackApiKey,
 		artifacts: new ArtifactStore(paths, config),
 		cache: new VisionCache(paths, config),
-		client: new VisionClient(config),
+		client: new VisionClient(config, fallbackApiKey),
 		uploadApproved: false,
 		visionCallsThisTurn: 0,
 		currentArtifacts: [],
@@ -78,9 +82,13 @@ async function approveUpload(state: RuntimeState, ctx: ExtensionContext): Promis
 	if (!ctx.hasUI) {
 		throw new Error("Remote image upload requires confirmation. Use Pi TUI or set upload confirmation to never.");
 	}
+	const destinations = [endpointName(state.config.baseUrl)];
+	if (state.config.fallbackModel && state.config.fallbackBaseUrl && state.fallbackApiKey) {
+		destinations.push(`${endpointName(state.config.fallbackBaseUrl)} (fallback)`);
+	}
 	const approved = await ctx.ui.confirm(
 		"Upload image for vision analysis?",
-		`The selected image data will be sent to ${endpointName(state.config.baseUrl)}.`,
+		`The selected image data may be sent to ${destinations.join(" or ")}.`,
 	);
 	if (!approved) throw new Error("Image upload was cancelled");
 	if (state.config.uploadConfirmation === "once") state.uploadApproved = true;
@@ -92,6 +100,19 @@ function assertCallBudget(state: RuntimeState): void {
 	state.visionCallsThisTurn += 1;
 }
 
+async function auditQuiet(state: RuntimeState, entry: AuditEntry): Promise<void> {
+	if (!state.config.auditEnabled) return;
+	try {
+		await appendAuditEntry(state.paths, entry);
+	} catch {
+		// The audit log must never break a vision call.
+	}
+}
+
+function modeLabel(input: { mode: string; comparison?: boolean }): string {
+	return input.comparison ? `compare:${input.mode}` : input.mode;
+}
+
 async function executeVision(
 	state: RuntimeState,
 	ctx: ExtensionContext,
@@ -101,40 +122,80 @@ async function executeVision(
 		throw new Error(`Pi Vision Bridge is disabled for ${activeModelLabel(ctx)}. Use the main model's native image input or configure Enabled main models.`);
 	}
 	assertCallBudget(state);
+	const artifactIds = input.artifacts.map((artifact) => artifact.id);
+	const mode = modeLabel(input);
 	const cacheKey = makeVisionCacheKey({
-		artifactIds: input.artifacts.map((artifact) => artifact.id),
+		artifactIds,
 		objective: input.objective,
-		mode: input.comparison ? `compare:${input.mode}` : input.mode,
+		mode,
 		model: state.config.model,
 	});
 	const cached = await state.cache.get(cacheKey);
 	if (cached) {
 		state.lastObservation = cached;
+		await auditQuiet(state, {
+			ts: new Date().toISOString(),
+			outcome: "cache",
+			model: cached.model,
+			mode,
+			imageCount: artifactIds.length,
+			artifactIds,
+			elapsedMs: 0,
+		});
 		return {
-			details: { observation: cached, cacheHit: true, elapsedMs: 0, artifactIds: input.artifacts.map((artifact) => artifact.id) },
+			details: { observation: cached, cacheHit: true, usedFallback: false, elapsedMs: 0, artifactIds },
 		};
+	}
+	if (state.config.localOnly) {
+		throw new Error(
+			"local-only mode: no cached vision result exists for this image, and image bytes would leave the machine. Disable local-only in /vision-settings or clear it to allow a remote vision call.",
+		);
 	}
 	await approveUpload(state, ctx);
 	const started = Date.now();
-	const result = await state.client.inspect({
-		ctx,
-		artifacts: input.artifacts,
-		objective: input.objective,
-		mode: input.mode,
-		comparison: input.comparison,
-		signal: input.signal,
-	});
-	await state.cache.set(cacheKey, result.observation);
-	state.lastObservation = result.observation;
-	return {
-		details: {
-			observation: result.observation,
-			cacheHit: false,
+	try {
+		const result = await state.client.inspect({
+			ctx,
+			artifacts: input.artifacts,
+			objective: input.objective,
+			mode: input.mode,
+			comparison: input.comparison,
+			signal: input.signal,
+		});
+		if (!result.usedFallback) await state.cache.set(cacheKey, result.observation);
+		state.lastObservation = result.observation;
+		await auditQuiet(state, {
+			ts: new Date().toISOString(),
+			outcome: result.usedFallback ? "fallback" : "success",
+			model: result.observation.model,
+			mode,
+			imageCount: artifactIds.length,
+			artifactIds,
 			elapsedMs: Date.now() - started,
-			artifactIds: input.artifacts.map((artifact) => artifact.id),
-		},
-		usage: result.usage,
-	};
+		});
+		return {
+			details: {
+				observation: result.observation,
+				cacheHit: false,
+				usedFallback: result.usedFallback,
+				elapsedMs: Date.now() - started,
+				artifactIds,
+			},
+			usage: result.usage,
+		};
+	} catch (error) {
+		await auditQuiet(state, {
+			ts: new Date().toISOString(),
+			outcome: "failure",
+			model: state.config.model,
+			mode,
+			imageCount: artifactIds.length,
+			artifactIds,
+			elapsedMs: Date.now() - started,
+			error: truncateError(error),
+		});
+		throw error;
+	}
 }
 
 function renderCall(label: string, objective: string, theme: { fg: (color: "accent" | "dim", text: string) => string }): Text {
@@ -145,7 +206,7 @@ function renderCall(label: string, objective: string, theme: { fg: (color: "acce
 function renderResult(result: { details?: unknown }, expanded: boolean, theme: { fg: (color: "accent" | "dim" | "success", text: string) => string }): Text {
 	const details = result.details as VisionToolDetails | undefined;
 	if (!details) return new Text(theme.fg("dim", "No vision result"));
-	const status = details.cacheHit ? "cache" : `${details.elapsedMs} ms`;
+	const status = details.cacheHit ? "cache" : `${details.usedFallback ? "fallback, " : ""}${details.elapsedMs} ms`;
 	const lines = [`${theme.fg("success", "Vision evidence")} ${theme.fg("dim", `(${status})`)}`, details.observation.summary];
 	if (expanded) {
 		for (const item of details.observation.observations) {
@@ -187,14 +248,14 @@ function imageReadBlockReason(path: string, references: ArtifactReference[]): st
 export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 	const initialLoaded = await loadConfig(process.cwd(), CONFIG_DIR_NAME, false);
 	const initialCredentials = await loadCredentials(initialLoaded.paths);
-	let state = buildRuntime(initialLoaded.config, initialLoaded.paths, initialCredentials?.apiKey);
-	registerVisionProvider(pi, state.config, state.apiKey);
+	let state = buildRuntime(initialLoaded.config, initialLoaded.paths, initialCredentials?.apiKey, initialCredentials?.fallbackApiKey);
+	registerVisionProvider(pi, state.config, state.apiKey, state.fallbackApiKey);
 
 	async function reloadForContext(ctx: ExtensionContext): Promise<void> {
 		const loaded = await loadConfig(ctx.cwd, CONFIG_DIR_NAME, ctx.isProjectTrusted());
 		const credentials = await loadCredentials(loaded.paths);
-		state = buildRuntime(loaded.config, loaded.paths, credentials?.apiKey);
-		registerVisionProvider(pi, state.config, state.apiKey);
+		state = buildRuntime(loaded.config, loaded.paths, credentials?.apiKey, credentials?.fallbackApiKey);
+		registerVisionProvider(pi, state.config, state.apiKey, state.fallbackApiKey);
 		for (const warning of loaded.warnings) ctx.ui.notify(warning, "warning");
 		updateStatus(state, ctx);
 	}
@@ -429,8 +490,8 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 				return;
 			}
 			await runSettings(ctx, state, scope, async (next) => {
-				state = buildRuntime(next.config, next.paths, next.apiKey);
-				registerVisionProvider(pi, state.config, state.apiKey);
+				state = buildRuntime(next.config, next.paths, next.apiKey, next.fallbackApiKey);
+				registerVisionProvider(pi, state.config, state.apiKey, state.fallbackApiKey);
 				updateStatus(state, ctx);
 			});
 		},
@@ -440,16 +501,14 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 		description: "Show Pi Vision Bridge status",
 		handler: async (_args, ctx) => {
 			const cacheSize = await state.cache.size();
-			const status = [
-				`model=${state.config.model}`,
-				`endpoint=${endpointName(state.config.baseUrl)}`,
-				`key=${state.apiKey ? "configured" : "missing"}`,
-				`enabled=${formatEnabledMainModels(state.config.enabledMainModels)}`,
-				`routing=${state.config.routing}`,
-				`concurrency=${state.config.maxConcurrentRequests}`,
-				`cache=${Math.round(cacheSize / 1024)} KiB`,
-			].join(", ");
-			ctx.ui.notify(status, state.config.baseUrl && state.apiKey ? "info" : "warning");
+			const auditEntries = await countAuditEntries(state.paths).catch(() => 0);
+			const fallback = state.config.fallbackBaseUrl
+				? `${state.config.fallbackModel}@${endpointName(state.config.fallbackBaseUrl)}`
+				: state.config.fallbackModel || "none";
+			ctx.ui.notify(
+				`model=${state.config.model}, endpoint=${endpointName(state.config.baseUrl)}, key=${state.apiKey ? "configured" : "missing"}, enabled=${formatEnabledMainModels(state.config.enabledMainModels)}, routing=${state.config.routing}, concurrency=${state.config.maxConcurrentRequests}, retries=${state.config.maxRetries}, fallback=${fallback}, local-only=${state.config.localOnly ? "on" : "off"}, audit=${state.config.auditEnabled ? `${auditEntries} entries` : "off"}, cache=${Math.round(cacheSize / 1024)} KiB`,
+				state.config.baseUrl && state.apiKey ? "info" : "warning",
+			);
 		},
 	});
 
@@ -468,7 +527,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 				data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
 			});
 			try {
-			const result = await executeVision(state, ctx, { artifacts: [pixel], objective: "Confirm that this is a tiny test image.", mode: "general", allowWhenDisabled: true });
+				const result = await executeVision(state, ctx, { artifacts: [pixel], objective: "Confirm that this is a tiny test image.", mode: "general", allowWhenDisabled: true });
 				ctx.ui.notify(`Vision endpoint responded: ${result.details.observation.summary}`, "info");
 			} catch (error) {
 				ctx.ui.notify(`Vision test failed: ${(error as Error).message}`, "error");
@@ -481,8 +540,55 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 		handler: async (_args, ctx) => {
 			if (ctx.hasUI && !(await ctx.ui.confirm("Clear vision cache?", "Cached image artifacts and vision results will be removed."))) return;
 			await rm(state.paths.cacheDir, { recursive: true, force: true });
-			state = buildRuntime(state.config, state.paths, state.apiKey);
+			state = buildRuntime(state.config, state.paths, state.apiKey, state.fallbackApiKey);
 			ctx.ui.notify("Vision cache cleared", "info");
+		},
+	});
+
+	pi.registerCommand("vision-audit", {
+		description: "Show or manage the vision delegation audit log",
+		handler: async (args, ctx) => {
+			const action = args.trim() || "show";
+			if (action === "on") {
+				const global = await loadConfig(ctx.cwd, CONFIG_DIR_NAME, false);
+				await saveGlobalConfig(global.paths, { ...global.config, auditEnabled: true });
+				state = { ...state, config: { ...state.config, auditEnabled: true } };
+				ctx.ui.notify("Vision audit log enabled", "info");
+				return;
+			}
+			if (action === "off") {
+				const global = await loadConfig(ctx.cwd, CONFIG_DIR_NAME, false);
+				await saveGlobalConfig(global.paths, { ...global.config, auditEnabled: false });
+				state = { ...state, config: { ...state.config, auditEnabled: false } };
+				ctx.ui.notify("Vision audit log disabled", "info");
+				return;
+			}
+			if (action === "clear") {
+				if (ctx.hasUI && !(await ctx.ui.confirm("Clear vision audit log?", "All audit entries will be removed."))) return;
+				await clearAuditEntries(state.paths);
+				ctx.ui.notify("Vision audit log cleared", "info");
+				return;
+			}
+			if (action === "count") {
+				ctx.ui.notify(`Vision audit log: ${await countAuditEntries(state.paths)} entries`, "info");
+				return;
+			}
+			// Default: show the most recent entries.
+			const [entries, total, size] = await Promise.all([
+				tailAuditEntries(state.paths, 8),
+				countAuditEntries(state.paths),
+				auditLogSize(state.paths),
+			]);
+			if (!entries.length) {
+				ctx.ui.notify("Vision audit log is empty", "info");
+				return;
+			}
+			ctx.ui.notify(`Vision audit log: ${total} entries, ${Math.round(size / 1024)} KiB (${state.config.auditEnabled ? "enabled" : "disabled"})`, "info");
+			for (const entry of entries) {
+				const outcome = entry.outcome === "fallback" ? "fallback" : entry.outcome;
+				const detail = entry.error ? ` error=${entry.error}` : ` ${entry.elapsedMs}ms`;
+				ctx.ui.notify(`[${entry.ts.slice(11, 19)}] ${outcome} model=${entry.model} mode=${entry.mode} images=${entry.imageCount}${detail}`, "info");
+			}
 		},
 	});
 

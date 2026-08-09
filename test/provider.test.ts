@@ -9,7 +9,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { ArtifactStore } from "../src/artifacts.js";
 import { DEFAULT_CONFIG, getConfigPaths } from "../src/config.js";
-import { VisionClient, VISION_PROVIDER_ID } from "../src/provider.js";
+import { registerVisionProvider, VisionClient, VISION_PROVIDER_ID } from "../src/provider.js";
 
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -92,9 +92,103 @@ it("sends the task objective and image together to the vision provider", async (
 	assert.equal(blocks.some((block) => block.type === "image" && Boolean(block.data)), true);
 });
 
-it("serializes concurrent vision requests and releases the slot after completion", async () => {
+it("falls back to the fallback model after retryable primary failures", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-vision-fallback-"));
+	const config = {
+		...DEFAULT_CONFIG,
+		baseUrl: "https://example.test/v1",
+		model: "vision-model",
+		fallbackModel: "fallback-model",
+		maxRetries: 1,
+	};
+	const paths = getConfigPaths(root, ".pi", { PI_CODING_AGENT_DIR: join(root, "global") });
+	const artifact = await new ArtifactStore(paths, config).ingestImage({ type: "image", data: PNG_1X1, mimeType: "image/png" });
+	const models: Record<string, Model<"openai-completions">> = {
+		[config.model]: {
+			id: config.model,
+			name: config.model,
+			api: "openai-completions",
+			provider: VISION_PROVIDER_ID,
+			baseUrl: config.baseUrl,
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 4_096,
+		},
+		[config.fallbackModel]: {
+			id: config.fallbackModel,
+			name: config.fallbackModel,
+			api: "openai-completions",
+			provider: VISION_PROVIDER_ID,
+			baseUrl: config.baseUrl,
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 4_096,
+		},
+	};
+	const usage = {
+		input: 10,
+		output: 20,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 30,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	const provider = {
+		stream(model: Model<"openai-completions">) {
+			if (model.id === config.model) throw new Error("HTTP 503 Service Unavailable");
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							mode: "ocr",
+							summary: "Fallback model read the error dialog.",
+							observations: [{ fact: "Error code 0x80070057", kind: "text", certainty: "observed", text: "0x80070057" }],
+							text_blocks: [],
+							uncertainties: [],
+						}),
+					},
+				],
+				api: "openai-completions",
+				provider: VISION_PROVIDER_ID,
+				model: config.fallbackModel,
+				usage,
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => stream.push({ type: "done", reason: "stop", message }));
+			return stream;
+		},
+	};
+	const ctx = {
+		modelRegistry: {
+			find: (_providerId: string, modelId: string) => models[modelId],
+			getProvider: () => provider,
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+		},
+	} as unknown as ExtensionContext;
+
+	const result = await new VisionClient(config).inspect({
+		ctx,
+		artifacts: [artifact],
+		objective: "Read the error dialog text.",
+		mode: "ocr",
+	});
+	assert.equal(result.usedFallback, true);
+	assert.equal(result.observation.model, "fallback-model");
+	assert.equal(result.observation.summary, "Fallback model read the error dialog.");
+	assert.equal(result.observation.observations[0]?.fact, "Error code 0x80070057");
+});
+
+it("keeps concurrent vision requests within the configured queue limit", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-vision-provider-queue-"));
-	const config = { ...DEFAULT_CONFIG, baseUrl: "https://example.test/v1", model: "vision-model", maxConcurrentRequests: 1 };
+	const config = { ...DEFAULT_CONFIG, baseUrl: "https://example.test/v1", model: "vision-model", maxConcurrentRequests: 1, maxRetries: 0 };
 	const paths = getConfigPaths(root, ".pi", { PI_CODING_AGENT_DIR: join(root, "global") });
 	const artifact = await new ArtifactStore(paths, config).ingestImage({ type: "image", data: PNG_1X1, mimeType: "image/png" });
 	const model: Model<"openai-completions"> = {
@@ -119,19 +213,17 @@ it("serializes concurrent vision requests and releases the slot after completion
 	};
 	let active = 0;
 	let maxActive = 0;
-	const startedObjectives: string[] = [];
 	let firstStarted!: () => void;
 	const firstStartedSignal = new Promise<void>((resolve) => {
 		firstStarted = resolve;
 	});
 	const provider = {
 		stream(_model: Model<"openai-completions">, context: Context) {
-			const content = context.messages[0]?.content;
-			const objective = Array.isArray(content) && content[0]?.type === "text" ? content[0].text : "unknown";
-			startedObjectives.push(objective);
 			active += 1;
 			maxActive = Math.max(maxActive, active);
-			if (startedObjectives.length === 1) firstStarted();
+			if (active === 1) firstStarted();
+			const content = context.messages[0]?.content;
+			const objective = Array.isArray(content) && content[0]?.type === "text" ? content[0].text : "unknown";
 			return {
 				result: async () => {
 					await new Promise((resolve) => setTimeout(resolve, 10));
@@ -162,10 +254,103 @@ it("serializes concurrent vision requests and releases the slot after completion
 	await firstStartedSignal;
 	const second = client.inspect({ ctx, artifacts: [artifact], objective: "second objective", mode: "general" });
 	const results = await Promise.all([first, second]);
-
 	assert.equal(maxActive, 1);
 	assert.equal(active, 0);
 	assert.equal(results[0].observation.summary.includes("first objective"), true);
 	assert.equal(results[1].observation.summary.includes("second objective"), true);
-	assert.equal(startedObjectives.length, 2);
+});
+
+it("registers the same-endpoint fallback model with the primary provider", () => {
+	const registered: Array<{ id: string; models: Array<{ id: string }> }> = [];
+	const pi = {
+		unregisterProvider: () => undefined,
+		registerProvider: (id: string, definition: { models: Array<{ id: string }> }) => registered.push({ id, models: definition.models }),
+	} as unknown as Parameters<typeof registerVisionProvider>[0];
+	registerVisionProvider(pi, { ...DEFAULT_CONFIG, baseUrl: "https://example.test/v1", model: "primary", fallbackModel: "fallback" }, "primary-key");
+	const primary = registered.find((entry) => entry.id === VISION_PROVIDER_ID);
+	assert.deepEqual(primary?.models.map((model) => model.id), ["primary", "fallback"]);
+});
+
+it("tries the fallback once for fatal primary errors without retrying", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-vision-fatal-"));
+	const config = {
+		...DEFAULT_CONFIG,
+		baseUrl: "https://example.test/v1",
+		model: "vision-model",
+		fallbackModel: "fallback-model",
+		maxRetries: 3,
+	};
+	const paths = getConfigPaths(root, ".pi", { PI_CODING_AGENT_DIR: join(root, "global") });
+	const artifact = await new ArtifactStore(paths, config).ingestImage({ type: "image", data: PNG_1X1, mimeType: "image/png" });
+	const model: Model<"openai-completions"> = {
+		id: config.model,
+		name: config.model,
+		api: "openai-completions",
+		provider: VISION_PROVIDER_ID,
+		baseUrl: config.baseUrl,
+		reasoning: false,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 4_096,
+	};
+	let primaryCalls = 0;
+	const usage = {
+		input: 10,
+		output: 20,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 30,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	const provider = {
+		stream(modelArg: Model<"openai-completions">) {
+			if (modelArg.id === config.model) {
+				primaryCalls += 1;
+				throw new Error("HTTP 400 Bad Request");
+			}
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							mode: "ocr",
+							summary: "Fallback model handled the fatal error.",
+							observations: [],
+							text_blocks: [],
+							uncertainties: [],
+						}),
+					},
+				],
+				api: "openai-completions",
+				provider: VISION_PROVIDER_ID,
+				model: config.fallbackModel,
+				usage,
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => stream.push({ type: "done", reason: "stop", message }));
+			return stream;
+		},
+	};
+	const ctx = {
+		modelRegistry: {
+			find: (_providerId: string, modelId: string) => (modelId === config.fallbackModel ? { ...model, id: config.fallbackModel } : model),
+			getProvider: () => provider,
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+		},
+	} as unknown as ExtensionContext;
+
+	const result = await new VisionClient(config).inspect({
+		ctx,
+		artifacts: [artifact],
+		objective: "Read the error dialog text.",
+		mode: "ocr",
+	});
+	assert.equal(result.usedFallback, true);
+	assert.equal(result.observation.summary, "Fallback model handled the fatal error.");
+	// A fatal error is not retried: the primary was called exactly once.
+	assert.equal(primaryCalls, 1);
 });

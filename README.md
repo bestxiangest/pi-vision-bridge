@@ -50,12 +50,14 @@ flowchart LR
 | 结构化视觉证据 | 区分可观察事实、推断和不确定项，支持 OCR 文本、归一化区域坐标和 UI 设计规格 |
 | 三类视觉工具 | 支持首次分析、局部追问和双图差异比较 |
 | 前端场景优化 | 支持页面逆向、几何测量、配色与组件提取，以及参考图与实现截图对比 |
-| 本地路径恢复 | 支持图片附件、macOS 剪贴板路径、拖拽路径、绝对/相对路径和 `@image.png` |
+| 本地路径恢复 | 支持图片附件、macOS 剪贴板路径、拖拽路径、Windows 盘符路径、绝对/相对路径和 `@image.png` |
 | `read` 自动拦截 | 纯文本模型误用 Pi 内置 `read` 读取图片时，插件会阻止读取并返回可用的 Artifact manifest |
 | 原生多模态绕过 | 当前主模型已支持图片输入时，不调用桥接视觉模型 |
 | 模型范围控制 | 可按 `provider/model`、模型 ID 或通配符限定插件生效范围 |
 | 真实并发调用 | 默认允许 4 个视觉请求同时执行，超出部分按 FIFO 排队 |
+| 弹性重试与 Fallback | 可重试错误自动退避重试，主模型失败后可切换同端点或独立端点的备用模型 |
 | 结果缓存 | 按图片、任务目标、模式和模型生成缓存键，避免重复调用 |
+| 审计与本地模式 | 记录不含图片和密钥的 JSONL 审计日志；local-only 模式只允许缓存命中 |
 | OpenAI 兼容端点 | Base URL、API Key 和视觉模型 ID 均可配置，支持 StepFun 和 DashScope 等兼容服务 |
 | 上传与密钥隔离 | 支持上传确认策略；API Key 独立保存，不进入项目配置 |
 
@@ -126,6 +128,10 @@ Step Plan 使用专用地址 `https://api.stepfun.com/step_plan/v1`。普通 API
 | `Response detail` | 视觉证据的简洁、均衡或详细级别 |
 | `Thinking` | 向支持该参数的端点请求思考模式 |
 | `Timeout` | 单次视觉请求超时时间 |
+| `Retries` | 可重试失败的额外重试次数，默认 `2`，范围 `0`～`6` |
+| `Fallback model` | 备用视觉模型 ID；留空表示禁用 Fallback |
+| `Fallback base URL` | 独立备用端点；留空时复用主端点 |
+| `Fallback API Key` | 独立备用端点的密钥，只保存在全局凭据文件中 |
 | `Concurrent requests` | 视觉网络请求并发上限，默认 `4`，范围 `1`～`16` |
 | `Max image size` | 单张图片的字节上限 |
 | `Max pixels` | 单张图片的像素上限 |
@@ -134,6 +140,8 @@ Step Plan 使用专用地址 `https://api.stepfun.com/step_plan/v1`。普通 API
 | `Cache` | 是否复用视觉结果 |
 | `Cache TTL` | 缓存结果的有效时间 |
 | `Cache limit` | 缓存容量上限 |
+| `Audit log` | 是否记录视觉委托的 append-only JSONL 审计日志 |
+| `Local-only` | 开启后禁止远程上传，只允许使用已缓存的视觉结果 |
 
 ### 主模型范围
 
@@ -236,7 +244,7 @@ Pi 有时会把粘贴或拖拽图片表现为路径文本。插件会识别本�
 
 ## 并发与缓存
 
-视觉工具可以真实并发执行。插件使用共享的 FIFO 并发队列，默认同时运行 4 个视觉网络请求；超过上限的请求等待可用槽位。请求成功、失败、超时或取消都会释放槽位。
+视觉工具可以真实并发执行。插件使用共享的 FIFO 并发队列，默认同时运行 4 个视觉网络请求；超过上限的请求等待可用槽位。主模型重试和 Fallback 调用也遵守同一并发上限，请求成功、失败、超时或取消都会释放槽位。
 
 缓存键由以下内容共同决定：
 
@@ -247,6 +255,21 @@ Pi 有时会把粘贴或拖拽图片表现为路径文本。插件会识别本�
 
 同一张图片针对不同目标或模式会产生独立结果。命中缓存时不会再次上传图片。
 
+### 弹性重试与 Fallback
+
+遇到 HTTP `408`、`425`、`429`、`5xx`、网络失败或超时时，主视觉模型默认额外重试 2 次，重试间隔采用带抖动的指数退避。用户取消会立即终止等待和后续请求。
+
+- 只配置 `Fallback model` 时，备用模型复用主端点和主密钥。
+- 同时配置 `Fallback base URL`、`Fallback model` 和 `Fallback API Key` 时，备用模型使用独立端点。
+
+独立 Fallback 端点可能接收图片时，上传确认会同时列出主端点和备用端点。Fallback 结果不会写入主模型的缓存键，工具详情与审计日志会标记本次切换。
+
+### 审计日志与 local-only
+
+启用审计后，每次成功、缓存命中、Fallback 或失败都会追加到 `~/.pi/agent/vision-bridge/audit.log`。记录包含时间、结果、模型、分析模式、图片数量、Artifact ID 和耗时；不包含图片字节、完整提示词或密钥。使用 `/vision-audit` 可查看、计数、启停或清理日志。
+
+开启 `Local-only` 后，缓存未命中的请求会直接拒绝，图片字节不会发送到任何远程视觉端点；已有缓存仍可正常使用。
+
 ## 命令
 
 | 命令 | 说明 |
@@ -254,9 +277,10 @@ Pi 有时会把粘贴或拖拽图片表现为路径文本。插件会识别本�
 | `/vision-settings` | 打开全局设置 |
 | `/vision-settings project` | 保存受信任项目的非敏感覆盖配置 |
 | `/vision-test` | 测试视觉端点和图片输入 |
-| `/vision-status` | 显示模型、端点、主模型范围、路由、并发和缓存状态 |
+| `/vision-status` | 显示模型、端点、主模型范围、路由、并发、重试、Fallback、审计和缓存状态 |
 | `/vision-last` | 在 Pi TUI 中预览最近一次分析的图片和证据 |
 | `/vision-cache-clear` | 清理本地图像 Artifact 和视觉结果缓存 |
+| `/vision-audit` | 显示最近 8 条审计记录；支持 `on`、`off`、`clear` 和 `count` |
 
 ## 隐私与安全
 
@@ -264,6 +288,8 @@ Pi 有时会把粘贴或拖拽图片表现为路径文本。插件会识别本�
 - 全局配置和凭据文件仅允许当前系统用户读写。
 - 项目配置只能覆盖非敏感设置，并要求项目已被信任。
 - 上传确认支持 `always`、`once` 和 `never`；默认使用 `always`。
+- `Local-only` 开启时，缓存未命中的图片不会发送到远程端点。
+- 审计日志不包含图片字节、完整提示词或密钥。
 - 图片中的文字、二维码和提示词均作为不可信数据处理，不能覆盖视觉 Harness 的规则。
 - 使用第三方视觉服务时，选中的图片像素会发送到该服务。
 
@@ -272,6 +298,7 @@ Pi 有时会把粘贴或拖拽图片表现为路径文本。插件会识别本�
 ```text
 ~/.pi/agent/vision-bridge/config.json
 ~/.pi/agent/vision-bridge/credentials.json
+~/.pi/agent/vision-bridge/audit.log
 ~/.pi/agent/vision-bridge/cache/
 <project>/.pi/vision-bridge/project.json
 ```
