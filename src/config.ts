@@ -23,6 +23,7 @@ export interface VisionConfig {
 	maxPixels: number;
 	maxImages: number;
 	maxFollowupsPerTurn: number;
+	maxConcurrentRequests: number;
 	cacheEnabled: boolean;
 	cacheTtlHours: number;
 	cacheMaxBytes: number;
@@ -62,6 +63,7 @@ export const DEFAULT_CONFIG: VisionConfig = {
 	maxPixels: 20_000_000,
 	maxImages: 8,
 	maxFollowupsPerTurn: 3,
+	maxConcurrentRequests: 4,
 	cacheEnabled: true,
 	cacheTtlHours: 168,
 	cacheMaxBytes: 512 * 1024 * 1024,
@@ -119,6 +121,7 @@ export function normalizeConfig(raw: unknown, base: VisionConfig = DEFAULT_CONFI
 		maxPixels: numberInRange(input.maxPixels, base.maxPixels, 1024, 50_000_000),
 		maxImages: numberInRange(input.maxImages, base.maxImages, 1, 32),
 		maxFollowupsPerTurn: numberInRange(input.maxFollowupsPerTurn, base.maxFollowupsPerTurn, 0, 12),
+		maxConcurrentRequests: numberInRange(input.maxConcurrentRequests, base.maxConcurrentRequests, 1, 16),
 		cacheEnabled: typeof input.cacheEnabled === "boolean" ? input.cacheEnabled : base.cacheEnabled,
 		cacheTtlHours: numberInRange(input.cacheTtlHours, base.cacheTtlHours, 1, 720),
 		cacheMaxBytes: numberInRange(input.cacheMaxBytes, base.cacheMaxBytes, 16 * 1024 * 1024, 4 * 1024 * 1024 * 1024),

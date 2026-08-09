@@ -440,10 +440,16 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 		description: "Show Pi Vision Bridge status",
 		handler: async (_args, ctx) => {
 			const cacheSize = await state.cache.size();
-			ctx.ui.notify(
-				`model=${state.config.model}, endpoint=${endpointName(state.config.baseUrl)}, key=${state.apiKey ? "configured" : "missing"}, enabled=${formatEnabledMainModels(state.config.enabledMainModels)}, routing=${state.config.routing}, cache=${Math.round(cacheSize / 1024)} KiB`,
-				state.config.baseUrl && state.apiKey ? "info" : "warning",
-			);
+			const status = [
+				`model=${state.config.model}`,
+				`endpoint=${endpointName(state.config.baseUrl)}`,
+				`key=${state.apiKey ? "configured" : "missing"}`,
+				`enabled=${formatEnabledMainModels(state.config.enabledMainModels)}`,
+				`routing=${state.config.routing}`,
+				`concurrency=${state.config.maxConcurrentRequests}`,
+				`cache=${Math.round(cacheSize / 1024)} KiB`,
+			].join(", ");
+			ctx.ui.notify(status, state.config.baseUrl && state.apiKey ? "info" : "warning");
 		},
 	});
 

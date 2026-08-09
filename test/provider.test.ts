@@ -91,3 +91,81 @@ it("sends the task objective and image together to the vision provider", async (
 	assert.equal(blocks.some((block) => block.type === "text" && block.text?.includes("Measure the table width")), true);
 	assert.equal(blocks.some((block) => block.type === "image" && Boolean(block.data)), true);
 });
+
+it("serializes concurrent vision requests and releases the slot after completion", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-vision-provider-queue-"));
+	const config = { ...DEFAULT_CONFIG, baseUrl: "https://example.test/v1", model: "vision-model", maxConcurrentRequests: 1 };
+	const paths = getConfigPaths(root, ".pi", { PI_CODING_AGENT_DIR: join(root, "global") });
+	const artifact = await new ArtifactStore(paths, config).ingestImage({ type: "image", data: PNG_1X1, mimeType: "image/png" });
+	const model: Model<"openai-completions"> = {
+		id: config.model,
+		name: config.model,
+		api: "openai-completions",
+		provider: VISION_PROVIDER_ID,
+		baseUrl: config.baseUrl,
+		reasoning: false,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 4_096,
+	};
+	const usage = {
+		input: 1,
+		output: 1,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 2,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	let active = 0;
+	let maxActive = 0;
+	const startedObjectives: string[] = [];
+	let firstStarted!: () => void;
+	const firstStartedSignal = new Promise<void>((resolve) => {
+		firstStarted = resolve;
+	});
+	const provider = {
+		stream(_model: Model<"openai-completions">, context: Context) {
+			const content = context.messages[0]?.content;
+			const objective = Array.isArray(content) && content[0]?.type === "text" ? content[0].text : "unknown";
+			startedObjectives.push(objective);
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			if (startedObjectives.length === 1) firstStarted();
+			return {
+				result: async () => {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+					active -= 1;
+					return {
+						role: "assistant",
+						content: [{ type: "text", text: JSON.stringify({ mode: "general", summary: objective, observations: [], text_blocks: [], uncertainties: [] }) }],
+						api: "openai-completions",
+						provider: VISION_PROVIDER_ID,
+						model: config.model,
+						usage,
+						stopReason: "stop",
+						timestamp: Date.now(),
+					} satisfies AssistantMessage;
+				},
+			};
+		},
+	};
+	const ctx = {
+		modelRegistry: {
+			find: () => model,
+			getProvider: () => provider,
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+		},
+	} as unknown as ExtensionContext;
+	const client = new VisionClient(config);
+	const first = client.inspect({ ctx, artifacts: [artifact], objective: "first objective", mode: "general" });
+	await firstStartedSignal;
+	const second = client.inspect({ ctx, artifacts: [artifact], objective: "second objective", mode: "general" });
+	const results = await Promise.all([first, second]);
+
+	assert.equal(maxActive, 1);
+	assert.equal(active, 0);
+	assert.equal(results[0].observation.summary.includes("first objective"), true);
+	assert.equal(results[1].observation.summary.includes("second objective"), true);
+	assert.equal(startedObjectives.length, 2);
+});

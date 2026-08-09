@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Artifact } from "./artifacts.js";
 import { readArtifactData } from "./artifacts.js";
 import type { VisionConfig } from "./config.js";
+import { RequestQueue } from "./request-queue.js";
 import { buildRepairPrompt, buildVisionPrompt, VISION_SYSTEM_PROMPT } from "./vision-prompts.js";
 import { parseVisionObservation, type VisionMode, type VisionObservation } from "./vision-schema.js";
 
@@ -81,7 +82,11 @@ function addUsage(left: Usage, right: Usage): Usage {
 }
 
 export class VisionClient {
-	constructor(private readonly config: VisionConfig) {}
+	private readonly requestQueue: RequestQueue;
+
+	constructor(private readonly config: VisionConfig) {
+		this.requestQueue = new RequestQueue(config.maxConcurrentRequests);
+	}
 
 	private resolveModel(ctx: ExtensionContext): Model<"openai-completions"> {
 		const model = ctx.modelRegistry.find(VISION_PROVIDER_ID, this.config.model);
@@ -99,20 +104,25 @@ export class VisionClient {
 			systemPrompt: VISION_SYSTEM_PROMPT,
 			messages: [{ role: "user", content, timestamp: Date.now() }],
 		};
-		const stream = provider.stream(model, context, {
-			apiKey: auth.apiKey,
-			headers: auth.headers,
-			env: auth.env,
-			signal,
-			timeoutMs: this.config.timeoutMs,
-			maxRetries: 1,
-			onPayload: (payload) => {
-				if (!this.config.enableThinking) return payload;
-				if (!payload || typeof payload !== "object") return payload;
-				return { ...(payload as Record<string, unknown>), enable_thinking: true };
-			},
-		});
-		return stream.result();
+		return this.requestQueue.run(() => {
+			const stream = provider.stream(model, context, {
+				apiKey: auth.apiKey,
+				headers: auth.headers,
+				env: auth.env,
+				signal,
+				timeoutMs: this.config.timeoutMs,
+				// A provider may return a long Retry-After for a throttled request. Keep
+				// tool calls responsive; the main model can decide whether to retry.
+				maxRetries: 1,
+				maxRetryDelayMs: 5_000,
+				onPayload: (payload) => {
+					if (!this.config.enableThinking) return payload;
+					if (!payload || typeof payload !== "object") return payload;
+					return { ...(payload as Record<string, unknown>), enable_thinking: true };
+				},
+			});
+			return stream.result();
+		}, signal);
 	}
 
 	async inspect(input: {

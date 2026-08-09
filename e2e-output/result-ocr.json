@@ -1,0 +1,297 @@
+{
+  "version": 1,
+  "artifactIds": [
+    "sha256:e2e-test"
+  ],
+  "mode": "ocr",
+  "summary": "Extracted all visible text from the GitHub repository page for earendil-works/pi, including navigation, repository metadata, file listing, and sidebar information.",
+  "observations": [
+    {
+      "fact": "Top navigation bar contains: Platform, Solutions, Resources, Open Source, Enterprise, Pricing, search box with placeholder 'Type / to search', Sign in, Sign up, and settings icon",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        0,
+        0,
+        1000,
+        110
+      ],
+      "text": "Platform Solutions Resources Open Source Enterprise Pricing Type / to search Sign in Sign up"
+    },
+    {
+      "fact": "Repository header shows: earendil-works/pi with Public label, Notifications button, Fork 10.6k, Star 85.7k",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        20,
+        130,
+        980,
+        190
+      ],
+      "text": "earendil-works / pi Public Notifications Fork 10.6k Star 85.7k"
+    },
+    {
+      "fact": "Navigation tabs: Code (active), Issues 69, Pull requests 24, Discussions, Actions, Projects, Security and quality 4, Insights",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        20,
+        220,
+        830,
+        275
+      ],
+      "text": "<> Code Issues 69 Pull requests 24 Discussions Actions Projects Security and quality 4 Insights"
+    },
+    {
+      "fact": "Branch selector shows 'main' with dropdown, 55 Branches, 310 Tags",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        25,
+        325,
+        290,
+        375
+      ],
+      "text": "main 55 Branches 310 Tags"
+    },
+    {
+      "fact": "Search input placeholder: 'Go to file'",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        480,
+        330,
+        620,
+        370
+      ],
+      "text": "Go to file"
+    },
+    {
+      "fact": "Code button with dropdown",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        645,
+        325,
+        735,
+        375
+      ],
+      "text": "Code"
+    },
+    {
+      "fact": "Latest commit by badlogic: 'docs(agent): complete explicit-state harness design' with checkmark, commit hash 936aff0, 5 hours ago, total 5,582 Commits",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        30,
+        425,
+        730,
+        465
+      ],
+      "text": "badlogic docs(agent): complete explicit-state harness design 936aff0 · 5 hours ago 5,582 Commits"
+    },
+    {
+      "fact": "File list with 8 entries showing directory/file names, commit messages, and timestamps",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        30,
+        495,
+        730,
+        995
+      ],
+      "text": ".github fix(coding-agent): announce only verified npm releases 2 days ago\n.husky chore: harden dependency workflows 3 months ago\n.pi feat(tui): add alternate-screen renderer last week\npackages docs(agent): complete explicit-state harness design 5 hours ago\nscripts fix: handle npm 12 pack --json object output in local releas... 19 hours ago\n.gitattributes chore: add repository .gitattributes for line ending normali... 6 months ago\n.gitignore fix(ai): validate generated model data before builds 3 weeks ago\n.npmrc chore: harden dependency workflows 3 months ago"
+    },
+    {
+      "fact": "About section title",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        760,
+        325,
+        810,
+        365
+      ],
+      "text": "About"
+    },
+    {
+      "fact": "Repository description: 'AI agent toolkit: unified LLM API, agent loop, TUI, coding agent CLI'",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        760,
+        390,
+        950,
+        455
+      ],
+      "text": "AI agent toolkit: unified LLM API, agent loop, TUI, coding agent CLI"
+    },
+    {
+      "fact": "Right sidebar links: Readme, MIT license, Contributing, Security policy, Activity, Custom properties",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        760,
+        475,
+        900,
+        735
+      ],
+      "text": "Readme\nMIT license\nContributing\nSecurity policy\nActivity\nCustom properties"
+    },
+    {
+      "fact": "Repository stats: 85.7k stars, 282 watching, 10.6k forks",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        760,
+        750,
+        860,
+        875
+      ],
+      "text": "85.7k stars\n282 watching\n10.6k forks"
+    },
+    {
+      "fact": "Report repository link",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        760,
+        890,
+        875,
+        920
+      ],
+      "text": "Report repository"
+    },
+    {
+      "fact": "Releases section header with count 254",
+      "kind": "text",
+      "certainty": "observed",
+      "bbox": [
+        760,
+        975,
+        860,
+        1000
+      ],
+      "text": "Releases 254"
+    }
+  ],
+  "textBlocks": [
+    {
+      "text": "Platform Solutions Resources Open Source Enterprise Pricing Type / to search Sign in Sign up",
+      "certainty": "observed",
+      "bbox": [
+        20,
+        30,
+        980,
+        90
+      ]
+    },
+    {
+      "text": "earendil-works / pi Public Notifications Fork 10.6k Star 85.7k",
+      "certainty": "observed",
+      "bbox": [
+        20,
+        135,
+        975,
+        185
+      ]
+    },
+    {
+      "text": "<> Code Issues 69 Pull requests 24 Discussions Actions Projects Security and quality 4 Insights",
+      "certainty": "observed",
+      "bbox": [
+        25,
+        230,
+        830,
+        270
+      ]
+    },
+    {
+      "text": "main 55 Branches 310 Tags Go to file Code",
+      "certainty": "observed",
+      "bbox": [
+        25,
+        325,
+        735,
+        375
+      ]
+    },
+    {
+      "text": "badlogic docs(agent): complete explicit-state harness design 936aff0 · 5 hours ago 5,582 Commits",
+      "certainty": "observed",
+      "bbox": [
+        30,
+        425,
+        730,
+        465
+      ]
+    },
+    {
+      "text": ".github fix(coding-agent): announce only verified npm releases 2 days ago\n.husky chore: harden dependency workflows 3 months ago\n.pi feat(tui): add alternate-screen renderer last week\npackages docs(agent): complete explicit-state harness design 5 hours ago\nscripts fix: handle npm 12 pack --json object output in local releas... 19 hours ago\n.gitattributes chore: add repository .gitattributes for line ending normali... 6 months ago\n.gitignore fix(ai): validate generated model data before builds 3 weeks ago\n.npmrc chore: harden dependency workflows 3 months ago",
+      "certainty": "observed",
+      "bbox": [
+        30,
+        495,
+        730,
+        995
+      ]
+    },
+    {
+      "text": "About\nAI agent toolkit: unified LLM API, agent loop, TUI, coding agent CLI\nReadme\nMIT license\nContributing\nSecurity policy\nActivity\nCustom properties\n85.7k stars\n282 watching\n10.6k forks\nReport repository\nReleases 254",
+      "certainty": "observed",
+      "bbox": [
+        760,
+        325,
+        875,
+        1000
+      ]
+    }
+  ],
+  "uncertainties": [
+    "The exact font sizes and weights are not measurable from the image",
+    "Some truncated text in file commit messages (e.g., 'local releas...', 'normali...') may be incomplete due to image resolution",
+    "The exact boundaries of the sidebar sections are approximated",
+    "The search box placeholder text 'Type / to search' is visible but the slash character may appear as a keyboard shortcut indicator"
+  ],
+  "designSpec": {
+    "layout": {
+      "type": "github_repository_page",
+      "structure": "header_navigation + repository_header + tab_navigation + file_explorer + right_sidebar",
+      "columns": "two-column layout with main content (left, ~75%) and sidebar (right, ~25%)"
+    },
+    "palette": [
+      "Background: white/light gray",
+      "Header: dark charcoal/near-black",
+      "Accent: GitHub blue for active tabs and links",
+      "Text: dark gray/black for primary, medium gray for secondary"
+    ],
+    "typography": [
+      "Sans-serif font family (system UI font)",
+      "Repository name: larger bold text",
+      "Navigation tabs: medium weight",
+      "File list: regular weight with monospace for file paths"
+    ],
+    "spacing": [
+      "Standard GitHub padding and margins",
+      "Clear separation between navigation tabs",
+      "Consistent row height for file list entries"
+    ],
+    "components": [
+      "Navigation bar with dropdown menus",
+      "Repository header with action buttons (Notifications, Fork, Star)",
+      "Tab navigation component",
+      "Branch selector dropdown",
+      "Search input field",
+      "File explorer table with icons",
+      "Right sidebar with About section and repository metadata"
+    ],
+    "responsive": [],
+    "motion": []
+  },
+  "comparison": {
+    "differences": [],
+    "evidence": "No comparison target provided in task"
+  },
+  "model": "step-3.7-flash",
+  "createdAt": "2026-08-09T06:08:33.864Z"
+}

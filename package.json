@@ -9,6 +9,7 @@
   "scripts": {
     "test": "node --import tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "e2e": "node --import tsx scripts/vision-e2e.ts",
     "pack:check": "npm pack --dry-run"
   },
   "peerDependencies": {

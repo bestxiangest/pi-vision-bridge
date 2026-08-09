@@ -120,6 +120,7 @@ export async function runSettings(
 			`Max pixels: ${config.maxPixels}`,
 			`Max images: ${config.maxImages}`,
 			`Max follow-ups: ${config.maxFollowupsPerTurn}`,
+			`Concurrent requests: ${config.maxConcurrentRequests}`,
 			`Cache: ${config.cacheEnabled ? "on" : "off"}`,
 			`Cache TTL: ${config.cacheTtlHours} h`,
 			`Cache limit: ${mib(config.cacheMaxBytes)}`,
@@ -220,6 +221,7 @@ export async function runSettings(
 			["Max pixels:", "maxPixels", 1],
 			["Max images:", "maxImages", 1],
 			["Max follow-ups:", "maxFollowupsPerTurn", 1],
+			["Concurrent requests:", "maxConcurrentRequests", 1],
 			["Cache TTL:", "cacheTtlHours", 1],
 			["Cache limit:", "cacheMaxBytes", 1024 * 1024],
 		];

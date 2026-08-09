@@ -28,6 +28,9 @@ describe("configuration", () => {
 		assert.equal(normalizeConfig({ baseUrl: "https://user:pass@example.test/v1?token=bad" }).baseUrl, "");
 		assert.equal(config.timeoutMs, 5_000);
 		assert.equal(config.maxImages, 32);
+		assert.equal(normalizeConfig({ maxConcurrentRequests: 0 }).maxConcurrentRequests, 1);
+		assert.equal(normalizeConfig({ maxConcurrentRequests: 99 }).maxConcurrentRequests, 16);
+		assert.equal(normalizeConfig({}).maxConcurrentRequests, 4);
 		assert.equal(config.routing, DEFAULT_CONFIG.routing);
 	});
 
