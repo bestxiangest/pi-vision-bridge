@@ -431,7 +431,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 		parameters: Type.Object({
 			artifact_id: Type.String({ description: "Exact artifact_id value from the attachment manifest, including the sha256: prefix." }),
 			question: Type.String(),
-			bbox: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number(), Type.Number()])),
+			bbox: Type.Optional(Type.Array(Type.Number(), { minItems: 4, maxItems: 4 })),
 			mode: Type.Optional(StringEnum(["general", "ocr", "ui_geometry", "error_screenshot"] as const)),
 		}),
 		async execute(_id, params, signal, onUpdate, ctx) {
