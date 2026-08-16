@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Artifact } from "./artifacts.js";
 import { readArtifactData } from "./artifacts.js";
 import type { VisionConfig } from "./config.js";
+import { encodeImageForUpload } from "./image-encode.js";
 import { classifyError, withRetry } from "./resilience.js";
 import { buildRepairPrompt, buildVisionPrompt, VISION_SYSTEM_PROMPT } from "./vision-prompts.js";
 import { parseVisionObservation, type VisionMode, type VisionObservation } from "./vision-schema.js";
@@ -182,7 +183,17 @@ export class VisionClient {
 	}): Promise<VisionCallResult> {
 		if (!input.objective.trim()) throw new Error("Vision objective cannot be empty");
 		const model = this.resolveModel(input.ctx, target);
-		const images = await Promise.all(input.artifacts.map(readArtifactData));
+		// The session context never reaches this request: each vision call is a
+		// fresh single-turn conversation with only the objective and a shrunk
+		// upload copy of the image bytes.
+		const images = await Promise.all(
+			input.artifacts.map(async (artifact) =>
+				encodeImageForUpload(await readArtifactData(artifact), {
+					maxEdgePx: this.config.uploadMaxEdgePx,
+					maxBytes: this.config.uploadMaxBytes,
+				}),
+			),
+		);
 		const prompt = buildVisionPrompt({
 			objective: input.objective,
 			mode: input.mode,

@@ -31,6 +31,10 @@ export interface VisionConfig {
 	localOnly: boolean;
 	maxImageBytes: number;
 	maxPixels: number;
+	/** Longest edge allowed in the uploaded copy; local artifacts keep originals. */
+	uploadMaxEdgePx: number;
+	/** Re-encode the uploaded copy as JPEG when it still exceeds this size. */
+	uploadMaxBytes: number;
 	maxImages: number;
 	maxFollowupsPerTurn: number;
 	cacheEnabled: boolean;
@@ -77,6 +81,8 @@ export const DEFAULT_CONFIG: VisionConfig = {
 	localOnly: false,
 	maxImageBytes: 20 * 1024 * 1024,
 	maxPixels: 20_000_000,
+	uploadMaxEdgePx: 2048,
+	uploadMaxBytes: 1024 * 1024,
 	maxImages: 8,
 	maxFollowupsPerTurn: 3,
 	cacheEnabled: true,
@@ -139,6 +145,8 @@ export function normalizeConfig(raw: unknown, base: VisionConfig = DEFAULT_CONFI
 		localOnly: typeof input.localOnly === "boolean" ? input.localOnly : base.localOnly,
 		maxImageBytes: numberInRange(input.maxImageBytes, base.maxImageBytes, 64 * 1024, 20 * 1024 * 1024),
 		maxPixels: numberInRange(input.maxPixels, base.maxPixels, 1024, 50_000_000),
+		uploadMaxEdgePx: numberInRange(input.uploadMaxEdgePx, base.uploadMaxEdgePx, 512, 8192),
+		uploadMaxBytes: numberInRange(input.uploadMaxBytes, base.uploadMaxBytes, 128 * 1024, 20 * 1024 * 1024),
 		maxImages: numberInRange(input.maxImages, base.maxImages, 1, 32),
 		maxFollowupsPerTurn: numberInRange(input.maxFollowupsPerTurn, base.maxFollowupsPerTurn, 0, 12),
 		cacheEnabled: typeof input.cacheEnabled === "boolean" ? input.cacheEnabled : base.cacheEnabled,

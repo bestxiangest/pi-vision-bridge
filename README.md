@@ -231,6 +231,8 @@ Pi 在 macOS 中粘贴图片使用 `Ctrl+V`，不是 `Cmd+V`：
 | `Fallback base URL` | 独立的 OpenAI 兼容备用端点；留空则 Fallback 复用主端点 |
 | `Max image size` | 单张图片允许的最大字节数 |
 | `Max pixels` | 单张图片允许的最大像素数 |
+| `Upload max edge` | 上传副本的最长边像素数（默认 2048）；本地 Artifact 始终保留原图 |
+| `Upload max size` | 缩放后仍超过该大小时重编码为 JPEG（默认 1 MiB），以缩短上传与视觉端处理时间 |
 | `Max images` | 单次输入允许的最大图片数量 |
 | `Max follow-ups` | 每轮首次分析之后允许的最大视觉追问次数 |
 | `Cache` | 是否复用已缓存的视觉结果 |
@@ -270,6 +272,19 @@ provider/*
 - **独立端点 Fallback**：同时配置 `Fallback base URL`、`Fallback model` 与 `Fallback API Key` 时，插件会注册第二个视觉 Provider，把请求切换到完全独立的服务商，适合主服务整体故障的场景。
 
 Fallback 成功的结果不会写入主模型缓存键，避免主模型缓存与备用模型结果混淆；`vision_inspect` 的工具结果与审计日志会标明本次是否使用了 Fallback。
+
+### 上传编码与视觉延迟
+
+每次视觉调用都是**独立单轮请求**：只包含视觉系统提示、任务 objective（最长 12,000 字符）和图片上传副本。主会话的对话历史（无论多大）不会被转发给视觉模型，因此视觉调用本身的耗时不随会话长度增长。
+
+上传前插件会用 sharp 对图片副本做两级压缩，本地 Artifact 中的原图字节不受影响（裁剪与预览仍使用原图）：
+
+1. 长边超过 `Upload max edge`（默认 2048 px）时按 Lanczos 缩放；
+2. 缩放后仍超过 `Upload max size`（默认 1 MiB）时重编码为 JPEG（白色背景合成、质量 90）。
+
+大图是视觉延迟的主要来源之一：一张 4032×3024 的手机照片或 3840×2160 的 4K 截图原样上传会产生数 MB 的 base64 载荷和远超必要的图像 token。压缩后上传体积通常下降一个数量级，而 2048 px 长边对主流视觉模型的识别精度基本无损。GIF 会原样上传以保留动画帧；编码失败时自动回退为原始字节，不会中断视觉调用。
+
+在长会话中分析图片的端到端时间变长，主要来自**主模型**在大上下文上的工具调用往返（每轮工具调用都需重新处理完整上下文），而不是视觉调用变慢。可用 `/vision-audit` 查看每次视觉委托的 `elapsedMs`：若新旧会话中视觉耗时接近，差值即为主模型的往返开销。进一步降低视觉耗时可选：将 `Response detail` 设为 `concise`、关闭 `Thinking`、或换用更快的视觉模型。
 
 ### 审计日志
 
@@ -373,6 +388,10 @@ Fallback 成功的结果不会写入主模型缓存键，避免主模型缓存�
 
 `always` 和尚未确认的 `once` 需要 Pi TUI。确实需要在自动化环境上传图片时，可以显式选择 `never`；这会取消每次上传前的交互确认，应只用于已评估数据边界的环境。
 
+### 大上下文会话里分析图片明显更慢
+
+视觉调用不会接收主会话上下文，其耗时不随会话长度变化。端到端变慢主要来自主模型在长上下文上的工具调用往返。执行 `/vision-audit` 对比新旧会话中视觉调用的 `elapsedMs` 可以确认这一点。若单次视觉调用本身就很慢，优先检查图片是否过大（见“上传编码与视觉延迟”）、`Response detail` 是否为 `detailed`、以及 `Thinking` 是否开启。
+
 ## 开发与验证
 
 ```bash
@@ -383,7 +402,7 @@ npm audit --omit=dev
 npm run pack:check
 ```
 
-测试覆盖 Artifact 存取与引用恢复、配置隔离、主模型匹配、macOS 路径恢复、视觉请求构造、缓存键和证据规范化。
+测试覆盖 Artifact 存取与引用恢复、配置隔离、主模型匹配、macOS 路径恢复、视觉请求构造（含单轮上下文隔离与上传编码）、缓存键和证据规范化。
 
 项目结构：
 
@@ -391,6 +410,7 @@ npm run pack:check
 extensions/vision-bridge.ts  Pi 扩展入口、工具和命令
 src/artifacts.ts             图片 Artifact 存储与引用解析
 src/config.ts                配置、凭据和模型路由
+src/image-encode.ts          上传副本的缩放与重编码
 src/image-paths.ts           本地图片路径恢复
 src/provider.ts              OpenAI 兼容视觉模型调用
 src/vision-prompts.ts        视觉 Harness 提示词

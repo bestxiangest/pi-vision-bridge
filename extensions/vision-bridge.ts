@@ -522,7 +522,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 			});
 			try {
 			const result = await executeVision(state, ctx, { artifacts: [pixel], objective: "Confirm that this is a tiny test image.", mode: "general", allowWhenDisabled: true });
-				ctx.ui.notify(`Vision endpoint responded: ${result.details.observation.summary}`, "info");
+				ctx.ui.notify(`Vision endpoint responded in ${result.details.elapsedMs} ms: ${result.details.observation.summary}`, "info");
 			} catch (error) {
 				ctx.ui.notify(`Vision test failed: ${(error as Error).message}`, "error");
 			}
