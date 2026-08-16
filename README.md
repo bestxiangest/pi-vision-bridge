@@ -16,6 +16,8 @@ Pi Vision Bridge 是一个面向 [Pi Agent](https://github.com/earendil-works/pi
 
 插件不会在图片到达后立即生成一段通用描述。纯文本主模型会先理解当前任务，再编写具体的视觉目标，并将目标和原始图片一起交给视觉模型。视觉模型返回结构化证据，主模型据此作出最终判断。
 
+本项目链接认可 [LinuxDO](https://linux.do/) 社区。
+
 ## 真实运行效果
 
 以下截图来自 Pi TUI 中的真实运行过程，展示纯文本主模型如何通过 Pi Vision Bridge 获取并使用视觉证据。
