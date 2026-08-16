@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="Pi Vision Bridge Logo" width="160">
+<img src="assets/logo.png" alt="Pi Vision Bridge Logo" width="112">
 
 # Pi Vision Bridge
 
@@ -15,6 +15,22 @@
 Pi Vision Bridge 是一个面向 [Pi Agent](https://github.com/earendil-works/pi) 的视觉桥接插件。它为 DeepSeek 等纯文本主模型接入独立的视觉模型，使主模型能够理解截图、照片、图表和文档，并继续完成编码、分析或决策任务。
 
 插件不会在图片到达后立即生成一段通用描述。纯文本主模型会先理解当前任务，再编写具体的视觉目标，并将目标和原始图片一起交给视觉模型。视觉模型返回结构化证据，主模型据此作出最终判断。
+
+## 真实运行效果
+
+以下截图来自 Pi TUI 中的真实运行过程，展示纯文本主模型如何通过 Pi Vision Bridge 获取并使用视觉证据。
+
+### 直接粘贴图片
+
+图片粘贴到会话后，插件生成 Artifact manifest；主模型理解用户目标，调用 `vision_inspect`，再依据结构化视觉证据回答。
+
+![直接粘贴图片后，Pi Vision Bridge 调用视觉模型并返回分析结果](img/直接粘贴图片询问AI.png)
+
+### 自动拦截 `read` 工具
+
+纯文本主模型尝试使用内置 `read` 读取图片时，插件会拦截调用、生成 Artifact manifest，并引导主模型改用 `vision_inspect` 完成识图。
+
+![Pi Vision Bridge 拦截 read 工具并自动转入视觉分析](img/自行拦截read工具识图.png)
 
 ## 核心原理
 
