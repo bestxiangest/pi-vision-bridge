@@ -301,7 +301,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 			if (!localScan.unresolved.length) return { action: "continue" };
 			return {
 				action: "transform",
-				text: `${event.text}\n\n[Pi Vision Bridge could not read the referenced local image. No artifact id exists; do not call vision_inspect with a path or filename.]`,
+				text: `${event.text}\n\n[Pi Vision Bridge could not resolve the referenced local image (the clipboard/temp file may no longer exist). Re-paste or re-attach the image so it can be ingested as an artifact. Do not call vision_inspect with a path or filename.]`,
 				images: [],
 			};
 		}
