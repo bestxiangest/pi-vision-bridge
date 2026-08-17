@@ -263,6 +263,14 @@ export class VisionClient {
 	 * Runs the primary target with exponential-backoff retries for retryable
 	 * failures (5xx/429/network). On a fatal primary failure or exhausted
 	 * retries, a configured fallback target is tried once. Aborts propagate.
+	 *
+	 * When `hedgeRequests` is enabled, each attempt fires two identical parallel
+	 * requests and returns the first valid JSON (the loser is aborted). The
+	 * reasoning model's chain-of-thought length is stochastic, so a single draw
+	 * randomly lands in a fast or a deep-thinking window; min-of-two draws make
+	 * the fast window the common case. Precision is unchanged (same prompt, same
+	 * model); the cost is up to 2x tokens per first read, which the results
+	 * cache absorbs on re-reads of the same image and objective.
 	 */
 	async inspect(input: {
 		ctx: ExtensionContext;
@@ -271,20 +279,82 @@ export class VisionClient {
 		mode: VisionMode;
 		comparison?: boolean;
 		signal?: AbortSignal;
-	}): Promise<VisionCallResult & { usedFallback: boolean }> {
+	}): Promise<VisionCallResult & { usedFallback: boolean; hedged: boolean }> {
 		const primary = this.primaryTarget();
 		try {
-			const { value } = await withRetry(() => this.inspectOnce(primary, input), {
+			const { value } = await withRetry(() => this.inspectOnceHedged(primary, input), {
 				maxRetries: this.config.maxRetries,
 				signal: input.signal,
 			});
-			return { ...value, usedFallback: false };
+			return { ...value, usedFallback: false, hedged: this.config.hedgeRequests };
 		} catch (error) {
 			if (classifyError(error, input.signal) === "abort") throw error;
 			const fallback = this.fallbackTarget();
 			if (!fallback) throw error;
-			const value = await this.inspectOnce(fallback, input);
-			return { ...value, usedFallback: true };
+			const value = await this.inspectOnceHedged(fallback, input);
+			return { ...value, usedFallback: true, hedged: this.config.hedgeRequests };
+		}
+	}
+
+	/** Single attempt, optionally raced with an identical twin (hedge). */
+	private async inspectOnceHedged(
+		target: VisionTarget,
+		input: Parameters<VisionClient["inspectOnce"]>[1],
+	): Promise<VisionCallResult> {
+		if (!this.config.hedgeRequests) return this.inspectOnce(target, input);
+		const outer = input.signal;
+		const controllers = [new AbortController(), new AbortController()];
+		const onOuterAbort = () => controllers.forEach((controller) => controller.abort());
+		if (outer) {
+			if (outer.aborted) onOuterAbort();
+			else outer.addEventListener("abort", onOuterAbort, { once: true });
+		}
+		const attempt = async (index: number): Promise<{ ok: true; value: VisionCallResult } | { ok: false; error: unknown }> => {
+		if (controllers[index].signal.aborted) {
+			return { ok: false, error: new DOMException("Aborted", "AbortError") };
+		}
+		try {
+				const value = await this.inspectOnce(target, { ...input, signal: controllers[index].signal });
+				return { ok: true, value };
+			} catch (error) {
+				return { ok: false, error };
+			}
+		};
+		try {
+			const settled = await new Promise<{ ok: true; value: VisionCallResult } | { ok: false; errors: unknown[] }>((resolve) => {
+				let done = false;
+				const finish = (result: { ok: true; value: VisionCallResult } | { ok: false; errors: unknown[] }) => {
+					if (done) return;
+					done = true;
+					resolve(result);
+				};
+				const [first, second] = [attempt(0), attempt(1)];
+				// First valid result wins; the loser is aborted to stop billing.
+				void first.then((result) => {
+					if (result.ok) {
+						controllers[1].abort();
+						finish(result);
+					}
+				});
+				void second.then((result) => {
+					if (result.ok) {
+						controllers[0].abort();
+						finish(result);
+					}
+				});
+				// Both failed: settle with both errors once they are in.
+				void Promise.all([first, second]).then(([a, b]) => {
+					finish({ ok: false, errors: [a.ok ? undefined : a.error, b.ok ? undefined : b.error] });
+				});
+			});
+			if (settled.ok) return settled.value;
+			// Both twins failed. Prefer a real error over a hedge-induced abort
+			// (a twin only aborts when the other won, which is impossible here).
+			const [first, second] = settled.errors;
+			if (outer?.aborted) throw first instanceof Error ? first : second;
+			throw (first ?? second) as Error;
+		} finally {
+			if (outer) outer.removeEventListener("abort", onOuterAbort);
 		}
 	}
 }

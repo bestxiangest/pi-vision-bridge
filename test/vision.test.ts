@@ -71,8 +71,9 @@ describe("vision evidence", () => {
 		assert.doesNotMatch(shape, /text_blocks/);
 		assert.doesNotMatch(shape, /design_spec/);
 		assert.doesNotMatch(shape, /"comparison"/);
-		assert.match(prompt, /[Aa]t most 5 observations and at most 2 uncertainties/);
-		assert.match(prompt, /Be terse/);
+		assert.match(prompt, /[Aa]t most 5 observations and 2 uncertainties/);
+		assert.match(prompt, /Short facts, no narration/);
+		assert.doesNotMatch(prompt, /Be thorough/); // detail qualifier would inflate reasoning latency
 		assert.match(prompt, /Return exactly one JSON object/);
 	});
 

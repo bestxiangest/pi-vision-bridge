@@ -129,6 +129,7 @@ export async function runSettings(
 			`Max images: ${config.maxImages}`,
 			`Max follow-ups: ${config.maxFollowupsPerTurn}`,
 			`Cache: ${config.cacheEnabled ? "on" : "off"}`,
+			`Hedged requests: ${config.hedgeRequests ? "on" : "off"}`,
 			`Cache TTL: ${config.cacheTtlHours} h`,
 			`Cache limit: ${mib(config.cacheMaxBytes)}`,
 			`Audit log: ${config.auditEnabled ? "on" : "off"}`,
@@ -240,6 +241,10 @@ export async function runSettings(
 		}
 		if (choice.startsWith("Cache:")) {
 			config.cacheEnabled = !config.cacheEnabled;
+			continue;
+		}
+		if (choice.startsWith("Hedged requests:")) {
+			config.hedgeRequests = !config.hedgeRequests;
 			continue;
 		}
 		if (choice.startsWith("Audit log:")) {

@@ -196,6 +196,7 @@ it("tries the fallback once for fatal primary errors without retrying", async ()
 	const root = await mkdtemp(join(tmpdir(), "pi-vision-fatal-"));
 	const config = {
 		...DEFAULT_CONFIG,
+		hedgeRequests: false, // this test asserts fallback semantics, not hedged primary attempts
 		baseUrl: "https://example.test/v1",
 		model: "vision-model",
 		fallbackModel: "fallback-model",
@@ -274,4 +275,143 @@ it("tries the fallback once for fatal primary errors without retrying", async ()
 	assert.equal(result.observation.summary, "Fallback model handled the fatal error.");
 	// A fatal error is not retried: the primary was called exactly once.
 	assert.equal(primaryCalls, 1);
+});
+
+it("hedges two parallel requests and returns the first valid result, aborting the loser", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-vision-hedge-"));
+	const config = { ...DEFAULT_CONFIG, hedgeRequests: true, baseUrl: "https://example.test/v1", model: "vision-model" };
+	const paths = getConfigPaths(root, ".pi", { PI_CODING_AGENT_DIR: join(root, "global") });
+	const artifact = await new ArtifactStore(paths, config).ingestImage({ type: "image", data: PNG_1X1, mimeType: "image/png" });
+	const model: Model<"openai-completions"> = {
+		id: config.model,
+		name: config.model,
+		api: "openai-completions",
+		provider: VISION_PROVIDER_ID,
+		baseUrl: config.baseUrl,
+		reasoning: false,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 4_096,
+	};
+	const usage = {
+		input: 10,
+		output: 20,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 30,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	const message = (summary: string): AssistantMessage => ({
+		role: "assistant",
+		content: [
+			{
+				type: "text",
+				text: JSON.stringify({ mode: "general", summary, observations: [], uncertainties: [] }),
+			},
+		],
+		api: "openai-completions",
+		provider: VISION_PROVIDER_ID,
+		model: config.model,
+		usage,
+		stopReason: "stop",
+		timestamp: Date.now(),
+	});
+	const signals: AbortSignal[] = [];
+	let slowResolve: ((m: AssistantMessage) => void) | undefined;
+	const provider = {
+		stream(_model: Model<"openai-completions">, _context: Context, options?: { signal?: AbortSignal }) {
+			signals.push(options?.signal ?? new AbortController().signal);
+			const stream = createAssistantMessageEventStream();
+			// First call (fast) wins; second call (slow) is still in flight when
+			// the winner lands, so it must be aborted.
+			if (signals.length === 1) queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: message("fast twin won") }));
+			else slowResolve = (m) => stream.push({ type: "done", reason: "stop", message: m });
+			return stream;
+		},
+	};
+	const ctx = {
+		modelRegistry: {
+			find: () => model,
+			getProvider: () => provider,
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+		},
+	} as unknown as ExtensionContext;
+
+	const result = await new VisionClient(config).inspect({
+		ctx,
+		artifacts: [artifact],
+		objective: "Which twin wins?",
+		mode: "general",
+	});
+	assert.equal(result.hedged, true);
+	assert.equal(result.observation.summary, "fast twin won");
+	// Give the aborted loser a beat to finish its in-flight image encoding and
+	// reach the provider, so the twin count and abort state are settled.
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	assert.equal(signals.length, 2, "two parallel requests were fired");
+	// The loser (second twin) was aborted once the winner landed.
+	assert.equal(signals[1].aborted, true, "loser twin must be aborted");
+});
+
+it("does not hedge when hedgeRequests is disabled", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-vision-noh-"));
+	const config = { ...DEFAULT_CONFIG, hedgeRequests: false, baseUrl: "https://example.test/v1", model: "vision-model" };
+	const paths = getConfigPaths(root, ".pi", { PI_CODING_AGENT_DIR: join(root, "global") });
+	const artifact = await new ArtifactStore(paths, config).ingestImage({ type: "image", data: PNG_1X1, mimeType: "image/png" });
+	const model: Model<"openai-completions"> = {
+		id: config.model,
+		name: config.model,
+		api: "openai-completions",
+		provider: VISION_PROVIDER_ID,
+		baseUrl: config.baseUrl,
+		reasoning: false,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 4_096,
+	};
+	const usage = {
+		input: 10,
+		output: 20,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 30,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	const message: AssistantMessage = {
+		role: "assistant",
+		content: [{ type: "text", text: JSON.stringify({ mode: "general", summary: "single call", observations: [], uncertainties: [] }) }],
+		api: "openai-completions",
+		provider: VISION_PROVIDER_ID,
+		model: config.model,
+		usage,
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+	let calls = 0;
+	const provider = {
+		stream(_model: Model<"openai-completions">, _context: Context) {
+			calls += 1;
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => stream.push({ type: "done", reason: "stop", message }));
+			return stream;
+		},
+	};
+	const ctx = {
+		modelRegistry: {
+			find: () => model,
+			getProvider: () => provider,
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+		},
+	} as unknown as ExtensionContext;
+
+	const result = await new VisionClient(config).inspect({
+		ctx,
+		artifacts: [artifact],
+		objective: "Single request only.",
+		mode: "general",
+	});
+	assert.equal(result.hedged, false);
+	assert.equal(calls, 1, "only one request when hedging is disabled");
 });

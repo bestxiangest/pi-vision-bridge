@@ -20,6 +20,8 @@ export interface AuditEntry {
 	imageCount: number;
 	artifactIds: string[];
 	elapsedMs: number;
+	/** True when two parallel requests raced and the first valid JSON won. */
+	hedged?: boolean;
 	/** Truncated error message for "failure" entries. */
 	error?: string;
 }

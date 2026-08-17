@@ -32,6 +32,7 @@ interface VisionToolDetails {
 	cacheHit: boolean;
 	elapsedMs: number;
 	artifactIds: string[];
+	hedged?: boolean;
 }
 
 function activeModelLabel(ctx: ExtensionContext): string {
@@ -167,6 +168,7 @@ async function executeVision(
 			imageCount: artifactIds.length,
 			artifactIds,
 			elapsedMs: Date.now() - started,
+			hedged: result.hedged,
 		});
 		return {
 			details: {
@@ -174,6 +176,7 @@ async function executeVision(
 				cacheHit: false,
 				elapsedMs: Date.now() - started,
 				artifactIds,
+				hedged: result.hedged,
 			},
 			usage: result.usage,
 		};
@@ -200,7 +203,7 @@ function renderCall(label: string, objective: string, theme: { fg: (color: "acce
 function renderResult(result: { details?: unknown }, expanded: boolean, theme: { fg: (color: "accent" | "dim" | "success", text: string) => string }): Text {
 	const details = result.details as VisionToolDetails | undefined;
 	if (!details) return new Text(theme.fg("dim", "No vision result"));
-	const status = details.cacheHit ? "cache" : `${details.elapsedMs} ms`;
+	const status = details.cacheHit ? "cache" : `${details.elapsedMs} ms${details.hedged ? " (hedged)" : ""}`;
 	const lines = [`${theme.fg("success", "Vision evidence")} ${theme.fg("dim", `(${status})`)}`, details.observation.summary];
 	if (expanded) {
 		for (const item of details.observation.observations) {

@@ -95,6 +95,7 @@ describe("configuration", () => {
 		assert.equal(normalizeConfig({}).uploadMaxEdgePx, DEFAULT_CONFIG.uploadMaxEdgePx);
 		assert.equal(normalizeConfig({}).uploadMaxBytes, DEFAULT_CONFIG.uploadMaxBytes);
 		assert.equal(DEFAULT_CONFIG.uploadMaxEdgePx, 1792); // token-optimal tile boundary on the target VL models
+		assert.equal(DEFAULT_CONFIG.hedgeRequests, true); // min-of-two parallel draws beat stochastic reasoning windows
 	});
 
 	it("stores a separate fallback API key in credentials", async () => {

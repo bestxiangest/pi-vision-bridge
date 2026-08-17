@@ -38,6 +38,7 @@ export interface VisionConfig {
 	maxImages: number;
 	maxFollowupsPerTurn: number;
 	cacheEnabled: boolean;
+	hedgeRequests: boolean;
 	cacheTtlHours: number;
 	cacheMaxBytes: number;
 }
@@ -86,6 +87,12 @@ export const DEFAULT_CONFIG: VisionConfig = {
 	maxImages: 8,
 	maxFollowupsPerTurn: 3,
 	cacheEnabled: true,
+	// Fire two identical vision requests and return the first valid JSON. The
+	// reasoning model's chain-of-thought length is stochastic (1400-9000 chars),
+	// so a single request randomly lands in a 7s or a 17s+ window; two parallel
+	// draws make the fast window the common case (min-of-2) at 2x token cost,
+	// which the results cache (same image+objective) mostly absorbs on re-reads.
+	hedgeRequests: true,
 	cacheTtlHours: 168,
 	cacheMaxBytes: 512 * 1024 * 1024,
 };
@@ -150,6 +157,7 @@ export function normalizeConfig(raw: unknown, base: VisionConfig = DEFAULT_CONFI
 		maxImages: numberInRange(input.maxImages, base.maxImages, 1, 32),
 		maxFollowupsPerTurn: numberInRange(input.maxFollowupsPerTurn, base.maxFollowupsPerTurn, 0, 12),
 		cacheEnabled: typeof input.cacheEnabled === "boolean" ? input.cacheEnabled : base.cacheEnabled,
+		hedgeRequests: typeof input.hedgeRequests === "boolean" ? input.hedgeRequests : base.hedgeRequests,
 		cacheTtlHours: numberInRange(input.cacheTtlHours, base.cacheTtlHours, 1, 720),
 		cacheMaxBytes: numberInRange(input.cacheMaxBytes, base.cacheMaxBytes, 16 * 1024 * 1024, 4 * 1024 * 1024 * 1024),
 	};

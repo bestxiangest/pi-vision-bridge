@@ -65,9 +65,9 @@ function shapeExample(mode: VisionMode, comparison: boolean): string {
 			? '{"fact":"one atomic fact","certainty":"observed|inferred|unclear","bbox":[0,0,1000,1000]}'
 			: '{"fact":"one atomic fact","certainty":"observed|inferred|unclear"}';
 	const parts = [
-		'"summary":"one concise answer"',
+		'"summary":"<2-3 sentence answer>"',
 		`"observations":[${observation}]`,
-		'"uncertainties":["unresolved ambiguity or measurement assumption"]',
+		'"uncertainties":["<only real ambiguities>"]',
 	];
 	if (contractSections(mode, comparison).textBlocks) {
 		parts.push('"text_blocks":[{"text":"exact visible text","certainty":"observed|unclear","bbox":[0,0,1000,1000]}]');
@@ -105,6 +105,11 @@ export function buildVisionPrompt(input: {
 		: input.imageCount > 1
 			? ` There are ${input.imageCount} images in attachment order; state which image supports each observation.`
 			: "";
+	// Measured on step-3.7-flash: a detail qualifier on the mode line ("Be
+	// thorough: ...") inflates the hidden chain-of-thought from ~1500 chars to
+	// 6000-9000+ chars without improving the visible observations (same-window
+	// A/B: 11s vs 19s average). So only the extreme detail levels get a qualifier
+	// and the balanced default stays bare, matching the champion prompt layout.
 	const detail =
 		input.detail === "concise"
 			? " Be concise: decision-critical evidence only."
@@ -119,12 +124,16 @@ export function buildVisionPrompt(input: {
 		input.comparison ? "" : "no comparison",
 	].filter(Boolean).join(", ");
 	const bboxRule = input.mode === "ui_geometry" ? " Use normalized [x1,y1,x2,y2] boxes in 0..1000; omit guessed boxes." : "";
+	// Champion layout (A/B verified ~2x faster than the previous 4-paragraph
+	// version): single newlines, bare mode line for balanced, no "Be terse:"
+	// prefix, no trailing "in this call.". Keep this structure stable; prompt
+	// length directly drives reasoning latency on the target model.
 	return [
 		`Visual task: ${objective}`,
 		`Mode: ${input.mode}.${role}${detail} ${MODE_DIRECTIVE[input.mode]}`,
 		`Return exactly one JSON object, no markdown, shape: ${shapeExample(input.mode, !!input.comparison)}`,
-		`At most ${budget.observations} observations and at most ${budget.uncertainties} uncertainties. Be terse: short facts, no narration.${bboxRule} ${forbid} in this call.`,
-	].filter(Boolean).join("\n\n");
+		`At most ${budget.observations} observations and ${budget.uncertainties} uncertainties. Short facts, no narration.${bboxRule} ${forbid}.`,
+	].join("\n");
 }
 
 export function buildRepairPrompt(invalidOutput: string): string {
