@@ -91,6 +91,16 @@ describe("configuration", () => {
 		assert.equal(normalizeConfig({}).localOnly, false);
 	});
 
+	it("parses upload encoding limits", () => {
+		assert.equal(normalizeConfig({ uploadMaxEdgePx: 99 }).uploadMaxEdgePx, 512); // clamped
+		assert.equal(normalizeConfig({ uploadMaxEdgePx: 4096 }).uploadMaxEdgePx, 4096);
+		assert.equal(normalizeConfig({ uploadMaxBytes: -5 }).uploadMaxBytes, 128 * 1024);
+		assert.equal(normalizeConfig({}).uploadMaxEdgePx, DEFAULT_CONFIG.uploadMaxEdgePx);
+		assert.equal(normalizeConfig({}).uploadMaxBytes, DEFAULT_CONFIG.uploadMaxBytes);
+		assert.equal(DEFAULT_CONFIG.uploadMaxEdgePx, 1792); // token-optimal tile boundary on the target VL models
+		assert.equal(DEFAULT_CONFIG.hedgeRequests, true); // min-of-two parallel draws beat stochastic reasoning windows
+	});
+
 	it("stores a separate fallback API key in credentials", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pi-vision-creds-"));
 		const paths = getConfigPaths(root, ".pi", { PI_CODING_AGENT_DIR: join(root, "global") });

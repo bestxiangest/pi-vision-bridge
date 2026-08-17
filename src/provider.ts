@@ -3,7 +3,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import type { Artifact } from "./artifacts.js";
 import { readArtifactData } from "./artifacts.js";
-import type { VisionConfig } from "./config.js";
+import type { VisionConfig, ResponseDetail } from "./config.js";
+import { encodeImageForUpload } from "./image-encode.js";
 import { RequestQueue } from "./request-queue.js";
 import { classifyError, withRetry } from "./resilience.js";
 import { buildRepairPrompt, buildVisionPrompt, VISION_SYSTEM_PROMPT } from "./vision-prompts.js";
@@ -22,6 +23,19 @@ export interface VisionCallResult {
 export interface VisionTarget {
 	providerId: string;
 	modelId: string;
+}
+
+/**
+ * Response budget per detail level. The reasoning chain-of-thought is
+ * uncontrollable (it can run 1000-8000+ chars even with the low-temperature
+ * terse prompt), so the caps are a reliability valve, not a throttle: a cap
+ * below ~1500 lets reasoning starve the visible JSON entirely (empty response
+ * -> whole call wasted). Measured: with the terse prompt + temp 0.1 a typical
+ * call completes in 6-16s and needs ~1500-3000 tokens; 4096 leaves enough
+ * room that content is always produced.
+ */
+function responseMaxTokens(detail: ResponseDetail): number {
+	return detail === "concise" ? 2048 : detail === "detailed" ? 8192 : 4096;
 }
 
 function registerProvider(
@@ -47,7 +61,7 @@ function registerProvider(
 			input: ["text", "image"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128_000,
-			maxTokens: config.responseDetail === "detailed" ? 8_192 : 4_096,
+			maxTokens: responseMaxTokens(config.responseDetail),
 			compat: config.preset === "dashscope" ? { thinkingFormat: "qwen", supportsReasoningEffort: false } : undefined,
 		})),
 	});
@@ -85,6 +99,20 @@ function responseText(response: AssistantMessage): string {
 		.map((block) => block.text)
 		.join("\n")
 		.trim();
+}
+
+/**
+ * Reasoning models can spend their whole token budget on hidden chain-of-thought
+ * and return no visible content. Retrying a fresh request (new reasoning budget)
+ * is far more reliable than a repair pass over an empty string, which would
+ * fabricate evidence. Surfaced as a retryable error so the existing retry policy
+ * re-attempts the vision call instead of double-latency repair.
+ */
+export class EmptyVisionResponseError extends Error {
+	constructor() {
+		super("Vision model returned no visible content (its reasoning consumed the token budget)");
+		this.name = "EmptyVisionResponseError";
+	}
 }
 
 function parseJsonObject(text: string): unknown {
@@ -168,6 +196,12 @@ export class VisionClient {
 				headers: auth.headers,
 				env: auth.env,
 				signal,
+				// Low temperature is load-bearing for latency on reasoning vision
+				// models: measured on step-3.7-flash, the hidden chain-of-thought
+				// shrinks from 2900-8400 chars to ~1300-2100 chars at 0.1 vs the
+				// endpoint default (0.5), taking typical calls from 15-40s to 6-8s
+				// while keeping the JSON extraction deterministic.
+				temperature: 0.1,
 				timeoutMs: this.config.timeoutMs,
 				maxRetries: 0,
 				onPayload: (payload) => {
@@ -190,7 +224,17 @@ export class VisionClient {
 	}): Promise<VisionCallResult> {
 		if (!input.objective.trim()) throw new Error("Vision objective cannot be empty");
 		const model = this.resolveModel(input.ctx, target);
-		const images = await Promise.all(input.artifacts.map(readArtifactData));
+		// The session context never reaches this request: each vision call is a
+		// fresh single-turn conversation with only the objective and a shrunk
+		// upload copy of the image bytes.
+		const images = await Promise.all(
+			input.artifacts.map(async (artifact) =>
+				encodeImageForUpload(await readArtifactData(artifact), {
+					maxEdgePx: this.config.uploadMaxEdgePx,
+					maxBytes: this.config.uploadMaxBytes,
+				}),
+			),
+		);
 		const prompt = buildVisionPrompt({
 			objective: input.objective,
 			mode: input.mode,
@@ -201,6 +245,7 @@ export class VisionClient {
 		const response = await this.complete(input.ctx, target, [{ type: "text", text: prompt }, ...images], input.signal);
 		let rawText = responseText(response);
 		let usage = response.usage;
+		if (!rawText) throw new EmptyVisionResponseError();
 		let parsed: unknown;
 		try {
 			parsed = parseJsonObject(rawText);
@@ -208,6 +253,7 @@ export class VisionClient {
 			const repair = await this.complete(input.ctx, target, buildRepairPrompt(rawText), input.signal);
 			rawText = responseText(repair);
 			usage = addUsage(usage, repair.usage);
+			if (!rawText) throw new EmptyVisionResponseError();
 			parsed = parseJsonObject(rawText);
 		}
 		return {
@@ -225,6 +271,14 @@ export class VisionClient {
 	 * Runs the primary target with exponential-backoff retries for retryable
 	 * failures (5xx/429/network). On a fatal primary failure or exhausted
 	 * retries, a configured fallback target is tried once. Aborts propagate.
+	 *
+	 * When `hedgeRequests` is enabled, each attempt fires two identical parallel
+	 * requests and returns the first valid JSON (the loser is aborted). The
+	 * reasoning model's chain-of-thought length is stochastic, so a single draw
+	 * randomly lands in a fast or a deep-thinking window; min-of-two draws make
+	 * the fast window the common case. Precision is unchanged (same prompt, same
+	 * model); the cost is up to 2x tokens per first read, which the results
+	 * cache absorbs on re-reads of the same image and objective.
 	 */
 	async inspect(input: {
 		ctx: ExtensionContext;
@@ -233,20 +287,82 @@ export class VisionClient {
 		mode: VisionMode;
 		comparison?: boolean;
 		signal?: AbortSignal;
-	}): Promise<VisionCallResult & { usedFallback: boolean }> {
+	}): Promise<VisionCallResult & { usedFallback: boolean; hedged: boolean }> {
 		const primary = this.primaryTarget();
 		try {
-			const { value } = await withRetry(() => this.inspectOnce(primary, input), {
+			const { value } = await withRetry(() => this.inspectOnceHedged(primary, input), {
 				maxRetries: this.config.maxRetries,
 				signal: input.signal,
 			});
-			return { ...value, usedFallback: false };
+			return { ...value, usedFallback: false, hedged: this.config.hedgeRequests };
 		} catch (error) {
 			if (classifyError(error, input.signal) === "abort") throw error;
 			const fallback = this.fallbackTarget();
 			if (!fallback) throw error;
-			const value = await this.inspectOnce(fallback, input);
-			return { ...value, usedFallback: true };
+			const value = await this.inspectOnceHedged(fallback, input);
+			return { ...value, usedFallback: true, hedged: this.config.hedgeRequests };
+		}
+	}
+
+	/** Single attempt, optionally raced with an identical twin (hedge). */
+	private async inspectOnceHedged(
+		target: VisionTarget,
+		input: Parameters<VisionClient["inspectOnce"]>[1],
+	): Promise<VisionCallResult> {
+		if (!this.config.hedgeRequests) return this.inspectOnce(target, input);
+		const outer = input.signal;
+		const controllers = [new AbortController(), new AbortController()];
+		const onOuterAbort = () => controllers.forEach((controller) => controller.abort());
+		if (outer) {
+			if (outer.aborted) onOuterAbort();
+			else outer.addEventListener("abort", onOuterAbort, { once: true });
+		}
+		const attempt = async (index: number): Promise<{ ok: true; value: VisionCallResult } | { ok: false; error: unknown }> => {
+		if (controllers[index].signal.aborted) {
+			return { ok: false, error: new DOMException("Aborted", "AbortError") };
+		}
+		try {
+				const value = await this.inspectOnce(target, { ...input, signal: controllers[index].signal });
+				return { ok: true, value };
+			} catch (error) {
+				return { ok: false, error };
+			}
+		};
+		try {
+			const settled = await new Promise<{ ok: true; value: VisionCallResult } | { ok: false; errors: unknown[] }>((resolve) => {
+				let done = false;
+				const finish = (result: { ok: true; value: VisionCallResult } | { ok: false; errors: unknown[] }) => {
+					if (done) return;
+					done = true;
+					resolve(result);
+				};
+				const [first, second] = [attempt(0), attempt(1)];
+				// First valid result wins; the loser is aborted to stop billing.
+				void first.then((result) => {
+					if (result.ok) {
+						controllers[1].abort();
+						finish(result);
+					}
+				});
+				void second.then((result) => {
+					if (result.ok) {
+						controllers[0].abort();
+						finish(result);
+					}
+				});
+				// Both failed: settle with both errors once they are in.
+				void Promise.all([first, second]).then(([a, b]) => {
+					finish({ ok: false, errors: [a.ok ? undefined : a.error, b.ok ? undefined : b.error] });
+				});
+			});
+			if (settled.ok) return settled.value;
+			// Both twins failed. Prefer a real error over a hedge-induced abort
+			// (a twin only aborts when the other won, which is impossible here).
+			const [first, second] = settled.errors;
+			if (outer?.aborted) throw first instanceof Error ? first : second;
+			throw (first ?? second) as Error;
+		} finally {
+			if (outer) outer.removeEventListener("abort", onOuterAbort);
 		}
 	}
 }

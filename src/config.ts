@@ -31,10 +31,15 @@ export interface VisionConfig {
 	localOnly: boolean;
 	maxImageBytes: number;
 	maxPixels: number;
+	/** Longest edge allowed in the uploaded copy; local artifacts keep originals. */
+	uploadMaxEdgePx: number;
+	/** Re-encode the uploaded copy as JPEG when it still exceeds this size. */
+	uploadMaxBytes: number;
 	maxImages: number;
 	maxFollowupsPerTurn: number;
 	maxConcurrentRequests: number;
 	cacheEnabled: boolean;
+	hedgeRequests: boolean;
 	cacheTtlHours: number;
 	cacheMaxBytes: number;
 }
@@ -78,10 +83,18 @@ export const DEFAULT_CONFIG: VisionConfig = {
 	localOnly: false,
 	maxImageBytes: 20 * 1024 * 1024,
 	maxPixels: 20_000_000,
+	uploadMaxEdgePx: 1792,
+	uploadMaxBytes: 1024 * 1024,
 	maxImages: 8,
 	maxFollowupsPerTurn: 3,
 	maxConcurrentRequests: 4,
 	cacheEnabled: true,
+	// Fire two identical vision requests and return the first valid JSON. The
+	// reasoning model's chain-of-thought length is stochastic (1400-9000 chars),
+	// so a single request randomly lands in a 7s or a 17s+ window; two parallel
+	// draws make the fast window the common case (min-of-2) at 2x token cost,
+	// which the results cache (same image+objective) mostly absorbs on re-reads.
+	hedgeRequests: true,
 	cacheTtlHours: 168,
 	cacheMaxBytes: 512 * 1024 * 1024,
 };
@@ -141,10 +154,13 @@ export function normalizeConfig(raw: unknown, base: VisionConfig = DEFAULT_CONFI
 		localOnly: typeof input.localOnly === "boolean" ? input.localOnly : base.localOnly,
 		maxImageBytes: numberInRange(input.maxImageBytes, base.maxImageBytes, 64 * 1024, 20 * 1024 * 1024),
 		maxPixels: numberInRange(input.maxPixels, base.maxPixels, 1024, 50_000_000),
+		uploadMaxEdgePx: numberInRange(input.uploadMaxEdgePx, base.uploadMaxEdgePx, 512, 8192),
+		uploadMaxBytes: numberInRange(input.uploadMaxBytes, base.uploadMaxBytes, 128 * 1024, 20 * 1024 * 1024),
 		maxImages: numberInRange(input.maxImages, base.maxImages, 1, 32),
 		maxFollowupsPerTurn: numberInRange(input.maxFollowupsPerTurn, base.maxFollowupsPerTurn, 0, 12),
 		maxConcurrentRequests: numberInRange(input.maxConcurrentRequests, base.maxConcurrentRequests, 1, 16),
 		cacheEnabled: typeof input.cacheEnabled === "boolean" ? input.cacheEnabled : base.cacheEnabled,
+		hedgeRequests: typeof input.hedgeRequests === "boolean" ? input.hedgeRequests : base.hedgeRequests,
 		cacheTtlHours: numberInRange(input.cacheTtlHours, base.cacheTtlHours, 1, 720),
 		cacheMaxBytes: numberInRange(input.cacheMaxBytes, base.cacheMaxBytes, 16 * 1024 * 1024, 4 * 1024 * 1024 * 1024),
 	};

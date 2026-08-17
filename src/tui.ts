@@ -124,10 +124,13 @@ export async function runSettings(
 			`Retries: ${config.maxRetries}`,
 			`Max image size: ${mib(config.maxImageBytes)}`,
 			`Max pixels: ${config.maxPixels}`,
+			`Upload max edge: ${config.uploadMaxEdgePx} px`,
+			`Upload max size: ${mib(config.uploadMaxBytes)}`,
 			`Max images: ${config.maxImages}`,
 			`Max follow-ups: ${config.maxFollowupsPerTurn}`,
 			`Concurrent requests: ${config.maxConcurrentRequests}`,
 			`Cache: ${config.cacheEnabled ? "on" : "off"}`,
+			`Hedged requests: ${config.hedgeRequests ? "on" : "off"}`,
 			`Cache TTL: ${config.cacheTtlHours} h`,
 			`Cache limit: ${mib(config.cacheMaxBytes)}`,
 			`Audit log: ${config.auditEnabled ? "on" : "off"}`,
@@ -241,6 +244,10 @@ export async function runSettings(
 			config.cacheEnabled = !config.cacheEnabled;
 			continue;
 		}
+		if (choice.startsWith("Hedged requests:")) {
+			config.hedgeRequests = !config.hedgeRequests;
+			continue;
+		}
 		if (choice.startsWith("Audit log:")) {
 			config.auditEnabled = !config.auditEnabled;
 			continue;
@@ -255,6 +262,8 @@ export async function runSettings(
 			["Retries:", "maxRetries", 1],
 			["Max image size:", "maxImageBytes", 1024 * 1024],
 			["Max pixels:", "maxPixels", 1],
+			["Upload max edge:", "uploadMaxEdgePx", 1],
+			["Upload max size:", "uploadMaxBytes", 1024 * 1024],
 			["Max images:", "maxImages", 1],
 			["Max follow-ups:", "maxFollowupsPerTurn", 1],
 			["Concurrent requests:", "maxConcurrentRequests", 1],

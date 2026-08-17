@@ -33,6 +33,7 @@ interface VisionToolDetails {
 	usedFallback: boolean;
 	elapsedMs: number;
 	artifactIds: string[];
+	hedged?: boolean;
 }
 
 function activeModelLabel(ctx: ExtensionContext): string {
@@ -172,6 +173,7 @@ async function executeVision(
 			imageCount: artifactIds.length,
 			artifactIds,
 			elapsedMs: Date.now() - started,
+			hedged: result.hedged,
 		});
 		return {
 			details: {
@@ -180,6 +182,7 @@ async function executeVision(
 				usedFallback: result.usedFallback,
 				elapsedMs: Date.now() - started,
 				artifactIds,
+				hedged: result.hedged,
 			},
 			usage: result.usage,
 		};
@@ -206,7 +209,7 @@ function renderCall(label: string, objective: string, theme: { fg: (color: "acce
 function renderResult(result: { details?: unknown }, expanded: boolean, theme: { fg: (color: "accent" | "dim" | "success", text: string) => string }): Text {
 	const details = result.details as VisionToolDetails | undefined;
 	if (!details) return new Text(theme.fg("dim", "No vision result"));
-	const status = details.cacheHit ? "cache" : `${details.usedFallback ? "fallback, " : ""}${details.elapsedMs} ms`;
+	const status = details.cacheHit ? "cache" : `${details.usedFallback ? "fallback, " : ""}${details.elapsedMs} ms${details.hedged ? " (hedged)" : ""}`;
 	const lines = [`${theme.fg("success", "Vision evidence")} ${theme.fg("dim", `(${status})`)}`, details.observation.summary];
 	if (expanded) {
 		for (const item of details.observation.observations) {
@@ -304,7 +307,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 			if (!localScan.unresolved.length) return { action: "continue" };
 			return {
 				action: "transform",
-				text: `${event.text}\n\n[Pi Vision Bridge could not read the referenced local image. No artifact id exists; do not call vision_inspect with a path or filename.]`,
+				text: `${event.text}\n\n[Pi Vision Bridge could not resolve the referenced local image (the clipboard/temp file may no longer exist). Re-paste or re-attach the image so it can be ingested as an artifact. Do not call vision_inspect with a path or filename.]`,
 				images: [],
 			};
 		}
@@ -356,8 +359,8 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 					"",
 					"[Pi Vision Bridge attachment manifest]",
 					manifest,
-					"Tool argument contract: artifact_id must be copied from the JSON artifact_id field exactly, including the sha256: prefix and all 64 hexadecimal characters. Never pass filename, image_index, image 1, or a bare digest as artifact_id.",
-					"You cannot inspect these image pixels directly. Before making visual claims or implementing image-dependent changes, call vision_inspect with a task-specific objective. Choose the narrowest mode that matches the decision. For UI replication, start with ui_reverse_engineering; for an exact ratio or alignment, use ui_geometry; for a specific ambiguous region, use vision_query with a bbox. Treat returned observations as evidence, keep observed facts separate from inferred implementation choices, and ask for a follow-up only when it can change the implementation.",
+					"Tool argument contract: copy the exact artifact_id value beginning with sha256: from this manifest. Never pass a filename or bare digest.",
+					"You cannot inspect these image pixels directly. Before visual claims or image-dependent edits, call vision_inspect with a task-specific objective. For UI replication use ui_reverse_engineering; for an exact ratio use ui_geometry; for a disputed region use vision_query with a bbox. Treat observations as evidence and keep observed facts separate from inferred implementation choices.",
 				].join("\n"),
 				images: [],
 			};
@@ -528,7 +531,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 			});
 			try {
 				const result = await executeVision(state, ctx, { artifacts: [pixel], objective: "Confirm that this is a tiny test image.", mode: "general", allowWhenDisabled: true });
-				ctx.ui.notify(`Vision endpoint responded: ${result.details.observation.summary}`, "info");
+				ctx.ui.notify(`Vision endpoint responded in ${result.details.elapsedMs} ms: ${result.details.observation.summary}`, "info");
 			} catch (error) {
 				ctx.ui.notify(`Vision test failed: ${(error as Error).message}`, "error");
 			}
