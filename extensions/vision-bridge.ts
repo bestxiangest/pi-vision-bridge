@@ -354,7 +354,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 					"[Pi Vision Bridge attachment manifest]",
 					manifest,
 					"Tool argument contract: copy the exact artifact_id value beginning with sha256: from this manifest. Never pass a filename or bare digest.",
-					"You cannot inspect these image pixels directly. Before visual claims or image-dependent edits, call vision_inspect with a task-specific objective. For UI replication use ui_reverse_engineering; for an exact ratio use ui_geometry; for a disputed region use vision_query with a bbox. Treat observations as evidence and keep observed facts separate from inferred implementation choices.",
+					"You cannot inspect these image pixels directly. Before visual claims or image-dependent edits, call vision_inspect with a task-specific objective; omit the mode to use auto (scene + relevant text + layout in one call). For full transcription use ocr, for an exact ratio use ui_geometry, for a disputed region use vision_query with a bbox. Treat observations as evidence and keep observed facts separate from inferred implementation choices.",
 				].join("\n"),
 				images: [],
 			};
@@ -398,6 +398,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 			"Use this bridge only when the active main model is text-only. If the active model accepts image input, inspect the image directly and do not call Pi Vision Bridge tools.",
 			"When the user message contains a Pi Vision Bridge attachment manifest, call vision_inspect before answering or editing based on its pixels.",
 			"For artifact_id, copy the complete JSON artifact_id value exactly, including the sha256: prefix and all 64 hexadecimal characters. Never use filename, image_index, image 1, or a bare hash.",
+			"Default to mode auto: it covers scene description, relevant visible text, and layout in ONE call. Pick a narrow mode only when the task is specifically full transcription (ocr), measurement (ui_geometry), UI replication (ui_reverse_engineering), chart/document/error analysis. Do not run two modes for one image; one call with the right mode is enough.",
 			"Write an objective that names the implementation decision, the evidence needed, and the expected output. Example: measure the table's visible bounds and estimate its viewport percentage, showing the calculation basis.",
 			"For a rich frontend reference, use ui_reverse_engineering for the first pass, then use vision_query for a disputed region or vision_compare after a current screenshot exists.",
 			"Do not ask the vision model to infer hidden DOM, source code, exact animation timing, or behavior that a still image cannot establish.",
@@ -408,12 +409,12 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 				examples: ["sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],
 			}),
 			objective: Type.String({ description: "Task-specific question or evidence request for the vision model" }),
-			mode: StringEnum(["general", "ocr", "ui_geometry", "ui_reverse_engineering", "chart", "document", "error_screenshot"] as const),
+			mode: Type.Optional(StringEnum(["auto", "general", "ocr", "ui_geometry", "ui_reverse_engineering", "chart", "document", "error_screenshot"] as const)),
 		}),
 		async execute(_id, params, signal, onUpdate, ctx) {
 			onUpdate?.({ content: [{ type: "text", text: "Inspecting image..." }], details: { progress: 20 } });
 			const artifact = await state.artifacts.resolveReference(params.artifact_id, state.currentArtifacts);
-			const result = await executeVision(state, ctx, { artifacts: [artifact], objective: params.objective, mode: params.mode, signal });
+			const result = await executeVision(state, ctx, { artifacts: [artifact], objective: params.objective, mode: params.mode ?? "auto", signal });
 			return { content: [{ type: "text", text: observationForModel(result.details.observation) }], details: result.details, usage: result.usage };
 		},
 		renderCall: (args, theme) => renderCall("Inspect", args.objective, theme),
@@ -429,7 +430,7 @@ export default async function visionBridge(pi: ExtensionAPI): Promise<void> {
 			artifact_id: Type.String({ description: "Exact artifact_id value from the attachment manifest, including the sha256: prefix." }),
 			question: Type.String(),
 			bbox: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number(), Type.Number()])),
-			mode: Type.Optional(StringEnum(["general", "ocr", "ui_geometry", "error_screenshot"] as const)),
+			mode: Type.Optional(StringEnum(["auto", "general", "ocr", "ui_geometry", "error_screenshot"] as const)),
 		}),
 		async execute(_id, params, signal, onUpdate, ctx) {
 			onUpdate?.({ content: [{ type: "text", text: "Inspecting image region..." }], details: { progress: 20 } });

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ConfigPaths, VisionConfig } from "./config.js";
 import type { VisionObservation } from "./vision-schema.js";
 
-export const VISION_PROMPT_VERSION = "2";
+export const VISION_PROMPT_VERSION = "3";
 
 function cacheKey(parts: string[]): string {
 	return createHash("sha256").update(parts.join("\u0000")).digest("hex");
