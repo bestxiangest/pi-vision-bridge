@@ -94,6 +94,7 @@ describe("configuration", () => {
 		assert.equal(normalizeConfig({ uploadMaxBytes: -5 }).uploadMaxBytes, 128 * 1024);
 		assert.equal(normalizeConfig({}).uploadMaxEdgePx, DEFAULT_CONFIG.uploadMaxEdgePx);
 		assert.equal(normalizeConfig({}).uploadMaxBytes, DEFAULT_CONFIG.uploadMaxBytes);
+		assert.equal(DEFAULT_CONFIG.uploadMaxEdgePx, 1792); // token-optimal tile boundary on the target VL models
 	});
 
 	it("stores a separate fallback API key in credentials", async () => {

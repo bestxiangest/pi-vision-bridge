@@ -81,7 +81,7 @@ export const DEFAULT_CONFIG: VisionConfig = {
 	localOnly: false,
 	maxImageBytes: 20 * 1024 * 1024,
 	maxPixels: 20_000_000,
-	uploadMaxEdgePx: 2048,
+	uploadMaxEdgePx: 1792,
 	uploadMaxBytes: 1024 * 1024,
 	maxImages: 8,
 	maxFollowupsPerTurn: 3,

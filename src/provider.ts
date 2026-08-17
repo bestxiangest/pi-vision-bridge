@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import type { Artifact } from "./artifacts.js";
 import { readArtifactData } from "./artifacts.js";
-import type { VisionConfig } from "./config.js";
+import type { VisionConfig, ResponseDetail } from "./config.js";
 import { encodeImageForUpload } from "./image-encode.js";
 import { classifyError, withRetry } from "./resilience.js";
 import { buildRepairPrompt, buildVisionPrompt, VISION_SYSTEM_PROMPT } from "./vision-prompts.js";
@@ -22,6 +22,19 @@ export interface VisionCallResult {
 export interface VisionTarget {
 	providerId: string;
 	modelId: string;
+}
+
+/**
+ * Response budget per detail level. The reasoning chain-of-thought is
+ * uncontrollable (it can run 1000-8000+ chars even with the low-temperature
+ * terse prompt), so the caps are a reliability valve, not a throttle: a cap
+ * below ~1500 lets reasoning starve the visible JSON entirely (empty response
+ * -> whole call wasted). Measured: with the terse prompt + temp 0.1 a typical
+ * call completes in 6-16s and needs ~1500-3000 tokens; 4096 leaves enough
+ * room that content is always produced.
+ */
+function responseMaxTokens(detail: ResponseDetail): number {
+	return detail === "concise" ? 2048 : detail === "detailed" ? 8192 : 4096;
 }
 
 function registerProvider(
@@ -48,7 +61,7 @@ function registerProvider(
 				input: ["text", "image"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 128_000,
-				maxTokens: config.responseDetail === "detailed" ? 8_192 : 4_096,
+				maxTokens: responseMaxTokens(config.responseDetail),
 				compat: config.preset === "dashscope" ? { thinkingFormat: "qwen", supportsReasoningEffort: false } : undefined,
 			},
 		],
@@ -84,6 +97,20 @@ function responseText(response: AssistantMessage): string {
 		.map((block) => block.text)
 		.join("\n")
 		.trim();
+}
+
+/**
+ * Reasoning models can spend their whole token budget on hidden chain-of-thought
+ * and return no visible content. Retrying a fresh request (new reasoning budget)
+ * is far more reliable than a repair pass over an empty string, which would
+ * fabricate evidence. Surfaced as a retryable error so the existing retry policy
+ * re-attempts the vision call instead of double-latency repair.
+ */
+export class EmptyVisionResponseError extends Error {
+	constructor() {
+		super("Vision model returned no visible content (its reasoning consumed the token budget)");
+		this.name = "EmptyVisionResponseError";
+	}
 }
 
 function parseJsonObject(text: string): unknown {
@@ -162,6 +189,12 @@ export class VisionClient {
 			headers: auth.headers,
 			env: auth.env,
 			signal,
+			// Low temperature is load-bearing for latency on reasoning vision
+			// models: measured on step-3.7-flash, the hidden chain-of-thought
+			// shrinks from 2900-8400 chars to ~1300-2100 chars at 0.1 vs the
+			// endpoint default (0.5), taking typical calls from 15-40s to 6-8s
+			// while keeping the JSON extraction deterministic.
+			temperature: 0.1,
 			timeoutMs: this.config.timeoutMs,
 			maxRetries: 0,
 			onPayload: (payload) => {
@@ -204,6 +237,7 @@ export class VisionClient {
 		const response = await this.complete(input.ctx, target, [{ type: "text", text: prompt }, ...images], input.signal);
 		let rawText = responseText(response);
 		let usage = response.usage;
+		if (!rawText) throw new EmptyVisionResponseError();
 		let parsed: unknown;
 		try {
 			parsed = parseJsonObject(rawText);
@@ -211,6 +245,7 @@ export class VisionClient {
 			const repair = await this.complete(input.ctx, target, buildRepairPrompt(rawText), input.signal);
 			rawText = responseText(repair);
 			usage = addUsage(usage, repair.usage);
+			if (!rawText) throw new EmptyVisionResponseError();
 			parsed = parseJsonObject(rawText);
 		}
 		return {

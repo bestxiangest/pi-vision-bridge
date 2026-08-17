@@ -14,7 +14,7 @@
 export type ErrorClass = "abort" | "retryable" | "fatal";
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
-const RETRYABLE_MESSAGE = /(?:429|5\d\d|408|425)\b|fetch failed|network|timeout|timed\s*out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|temporarily|overloaded|rate\s*limit|too many requests|internal server|bad gateway|service unavailable|gateway timeout|upstream/i;
+const RETRYABLE_MESSAGE = /(?:429|5\d\d|408|425)\b|fetch failed|network|timeout|timed\s*out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|temporarily|overloaded|rate\s*limit|too many requests|internal server|bad gateway|service unavailable|gateway timeout|upstream|no visible content/i;
 
 function numericStatus(err: unknown): number | undefined {
 	const status = (err as { status?: unknown }).status;
