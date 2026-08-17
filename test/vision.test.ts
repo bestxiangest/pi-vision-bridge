@@ -25,22 +25,6 @@ describe("vision evidence", () => {
 		assert.deepEqual(result.uncertainties, ["The DOM parent is not visible"]);
 	});
 
-	it("parses auto mode responses including optional text_blocks", () => {
-		const result = parseVisionObservation(
-			{
-				mode: "auto",
-				summary: "A chat workbench with a session list, conversation, and file panel.",
-				observations: [{ fact: "Left sidebar lists sessions", certainty: "observed" }],
-				text_blocks: [{ text: "dsh_web", certainty: "observed" }],
-				uncertainties: [],
-			},
-			{ artifactIds: ["sha256:abc"], mode: "auto", model: "vision-model" },
-		);
-		assert.equal(result.mode, "auto");
-		assert.equal(result.textBlocks[0]?.text, "dsh_web");
-		assert.equal(result.observations.length, 1);
-	});
-
 	it("changes cache keys when task intent changes", () => {
 		const base = { artifactIds: ["sha256:a"], mode: "ui_geometry", model: "qwen" };
 		assert.notEqual(makeVisionCacheKey({ ...base, objective: "measure table" }), makeVisionCacheKey({ ...base, objective: "extract colors" }));
@@ -91,22 +75,6 @@ describe("vision evidence", () => {
 		assert.match(prompt, /Short facts, no narration/);
 		assert.doesNotMatch(prompt, /Be thorough/); // detail qualifier would inflate reasoning latency
 		assert.match(prompt, /Return exactly one JSON object/);
-	});
-
-	it("keeps auto mode comprehensive but bounded: no transcription shape, verbatim quotes in facts, 8 observations", () => {
-		const prompt = buildVisionPrompt({
-			objective: "Explain what this screenshot shows.",
-			mode: "auto",
-			detail: "balanced",
-			imageCount: 1,
-		});
-		const shape = prompt.split("\n").find((line) => line.includes("shape:")) ?? "";
-		assert.doesNotMatch(shape, /text_blocks/);
-		assert.doesNotMatch(shape, /design_spec/);
-		assert.match(prompt, /[Aa]t most 8 observations and 3 uncertainties/);
-		assert.match(prompt, /Quote important visible text verbatim in facts/);
-		assert.match(prompt, /comprehensively/);
-		assert.doesNotMatch(prompt, /Be thorough/);
 	});
 
 	it("adds text_blocks only for transcription modes and design_spec only for ui_reverse_engineering", () => {

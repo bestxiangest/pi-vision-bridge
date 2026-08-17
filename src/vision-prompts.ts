@@ -21,7 +21,6 @@ export const VISION_SYSTEM_PROMPT = [
 ].join("\n");
 
 const MODE_DIRECTIVE: Record<VisionMode, string> = {
-	auto: "Analyze the image comprehensively for this task: scene/UI, relevant visible text, layout, colors.",
 	general: "Analyze the attached image only for this task.",
 	ocr: "Transcribe visible text exactly; preserve reading order.",
 	ui_geometry: "Measure layout bounds, sizes, gaps, alignment; report the visible bounds behind any ratio.",
@@ -37,7 +36,6 @@ const MODE_DIRECTIVE: Record<VisionMode, string> = {
  * must stay small: hard caps here are what keep calls fast.
  */
 const OUTPUT_BUDGET: Record<VisionMode, { observations: number; uncertainties: number }> = {
-	auto: { observations: 8, uncertainties: 3 },
 	general: { observations: 5, uncertainties: 2 },
 	ocr: { observations: 8, uncertainties: 2 },
 	ui_geometry: { observations: 8, uncertainties: 2 },
@@ -50,10 +48,6 @@ const OUTPUT_BUDGET: Record<VisionMode, { observations: number; uncertainties: n
 /** Which optional sections the response is asked for in each mode. */
 function contractSections(mode: VisionMode, comparison: boolean): { textBlocks: boolean; designSpec: boolean } {
 	return {
-		// Auto mode deliberately has no text_blocks section: a transcription
-		// shape inflates the prompt, which drives the model's reasoning length
-		// (measured: 830c prompt -> 8400c reasoning and a starved response).
-		// Key text is captured verbatim inside observation facts instead.
 		textBlocks: mode === "ocr" || mode === "document" || mode === "error_screenshot",
 		designSpec: mode === "ui_reverse_engineering",
 	};
@@ -130,10 +124,6 @@ export function buildVisionPrompt(input: {
 		input.comparison ? "" : "no comparison",
 	].filter(Boolean).join(", ");
 	const bboxRule = input.mode === "ui_geometry" ? " Use normalized [x1,y1,x2,y2] boxes in 0..1000; omit guessed boxes." : "";
-	// Auto mode covers scene + relevant text + layout in one pass. Text is
-	// quoted verbatim inside facts (a text_blocks transcription section would
-	// inflate the prompt and with it the reasoning latency, see contractSections).
-	const autoRule = input.mode === "auto" ? " Quote important visible text verbatim in facts." : "";
 	// Champion layout (A/B verified ~2x faster than the previous 4-paragraph
 	// version): single newlines, bare mode line for balanced, no "Be terse:"
 	// prefix, no trailing "in this call.". Keep this structure stable; prompt
@@ -142,7 +132,7 @@ export function buildVisionPrompt(input: {
 		`Visual task: ${objective}`,
 		`Mode: ${input.mode}.${role}${detail} ${MODE_DIRECTIVE[input.mode]}`,
 		`Return exactly one JSON object, no markdown, shape: ${shapeExample(input.mode, !!input.comparison)}`,
-		`At most ${budget.observations} observations and ${budget.uncertainties} uncertainties. Short facts, no narration.${bboxRule}${autoRule} ${forbid}.`,
+		`At most ${budget.observations} observations and ${budget.uncertainties} uncertainties. Short facts, no narration.${bboxRule} ${forbid}.`,
 	].join("\n");
 }
 

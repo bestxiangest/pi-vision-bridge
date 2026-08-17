@@ -1,4 +1,4 @@
-export type VisionMode = "auto" | "general" | "ocr" | "ui_geometry" | "ui_reverse_engineering" | "chart" | "document" | "error_screenshot";
+export type VisionMode = "general" | "ocr" | "ui_geometry" | "ui_reverse_engineering" | "chart" | "document" | "error_screenshot";
 export type Certainty = "observed" | "inferred" | "unclear";
 
 export interface VisionObservationItem {
@@ -29,7 +29,7 @@ export interface VisionObservation {
 	createdAt: string;
 }
 
-const MODES: VisionMode[] = ["auto", "general", "ocr", "ui_geometry", "ui_reverse_engineering", "chart", "document", "error_screenshot"];
+const MODES: VisionMode[] = ["general", "ocr", "ui_geometry", "ui_reverse_engineering", "chart", "document", "error_screenshot"];
 const CERTAINTIES: Certainty[] = ["observed", "inferred", "unclear"];
 
 function objectValue(value: unknown): Record<string, unknown> {
